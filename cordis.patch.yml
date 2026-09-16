@@ -1,0 +1,5 @@
+# Bundle patch layer: 该行以包主入口作为 host 半;package.json 的 dsh.client 声明
+# 使 Web 应用把 ./client 载入为浏览器半。
+- insert:
+    - id: dsh-bitwarden
+      name: '@dsh-external/dsh-bitwarden'

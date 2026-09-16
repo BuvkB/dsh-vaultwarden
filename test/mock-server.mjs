@@ -1,0 +1,439 @@
+/**
+ * Mock Vaultwarden/Bitwarden server used by the offline tests.
+ *
+ * Implements the server half of the protocol with Bitwarden's own crypto
+ * (PBKDF2/Argon2 master key, HKDF-Expand stretch, AES-256-CBC + HMAC-SHA256
+ * EncStrings, per-item organization keys, legacy type-0 cipher strings), so the
+ * client under test talks to something that behaves like the real server —
+ * including rejecting a wrong master password hash.
+ *
+ * `test/cli-interop.mjs` points the *official* Bitwarden CLI at this server,
+ * which turns it into a cross-implementation check of the shared crypto.
+ */
+import {
+  constants as cryptoConstants,
+  createHmac,
+  createCipheriv,
+  generateKeyPairSync,
+  pbkdf2Sync,
+  publicEncrypt,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
+import { hashMasterPassword, stretchKey } from '../lib/vault.js'
+
+export const EMAIL = 'dsh-test@example.com'
+export const PASSWORD = 'correct horse battery staple'
+export const ITERATIONS = 600_000
+// Bitwarden user ids are GUIDs; the official CLI validates that shape.
+export const USER_ID = '7f3d9a1e-6c2b-4f5a-9d31-8b0c4e2a5f77'
+
+// RFC 6238 reference secret ("12345678901234567890" in Base32), 8 digits.
+export const RFC_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+export const RFC_URI = `otpauth://totp/RFC:test?secret=${RFC_SECRET}&issuer=RFC&algorithm=SHA1&digits=8&period=30`
+
+function hkdfExpand(prk, info, length) {
+  let previous = Buffer.alloc(0)
+  let okm = Buffer.alloc(0)
+  for (let counter = 1; okm.length < length; counter++) {
+    previous = createHmac('sha256', prk)
+      .update(Buffer.concat([previous, Buffer.from(info, 'utf8'), Buffer.from([counter])]))
+      .digest()
+    okm = Buffer.concat([okm, previous])
+  }
+  return okm.subarray(0, length)
+}
+
+export function encryptBytes(plain, key, type = 2) {
+  const iv = randomBytes(16)
+  const cipher = createCipheriv('aes-256-cbc', key.enc, iv)
+  const data = Buffer.concat([cipher.update(plain), cipher.final()])
+  const base = `${type}.${iv.toString('base64')}|${data.toString('base64')}`
+  if (type === 0) return base
+  const mac = createHmac('sha256', key.mac).update(Buffer.concat([iv, data])).digest('base64')
+  return `${base}|${mac}`
+}
+
+export function encryptString(plain, key, type = 2) {
+  if (plain === undefined || plain === null) return undefined
+  return encryptBytes(Buffer.from(plain, 'utf8'), key, type)
+}
+
+/** RSA-2048 OAEP-SHA1 wrapping, i.e. Bitwarden EncString type 4. */
+export function rsaWrap(plain, publicKeyObject) {
+  const data = publicEncrypt(
+    { key: publicKeyObject, padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha1' },
+    plain,
+  )
+  return `4.${data.toString('base64')}`
+}
+
+export async function argon2idOrNull() {
+  try {
+    return (await import('hash-wasm')).argon2id
+  } catch {
+    return null
+  }
+}
+
+/** A decode-able (not verified) JWT, as the official clients expect for access tokens. */
+export function makeAccessToken({ userId = USER_ID, clientId = 'cli', email = EMAIL, deviceId = 'mock-device' } = {}) {
+  const b64u = (value) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const issuedAt = Math.floor(Date.now() / 1000)
+  return [
+    b64u({ alg: 'HS256', typ: 'JWT' }),
+    b64u({
+      nbf: issuedAt - 10,
+      exp: issuedAt + 3600,
+      iss: 'mock-vaultwarden',
+      sub: userId,
+      premium: true, // TOTP generation is a premium feature in the official client
+      email,
+      email_verified: true,
+      amr: ['Application'],
+      client_id: clientId,
+      device: deviceId,
+      scope: ['api', 'offline_access'],
+      security_stamp: 'mock-security-stamp',
+    }),
+    Buffer.from('mock-signature').toString('base64url'),
+  ].join('.')
+}
+
+export async function serverMasterKey(password, kdf) {
+  if (Number(kdf.kdf) === 1) {
+    const argon2id = await argon2idOrNull()
+    if (!argon2id) return null
+    return Buffer.from(
+      await argon2id({
+        password,
+        salt: EMAIL,
+        parallelism: kdf.kdfParallelism ?? 4,
+        iterations: kdf.kdfIterations ?? 3,
+        memorySize: kdf.kdfMemory ?? 64,
+        hashLength: 32,
+        outputType: 'binary',
+      }),
+    )
+  }
+  return pbkdf2Sync(password, EMAIL, kdf.kdfIterations, 32, 'sha256')
+}
+
+/** Build the encrypted vault the mock serves, plus the keys it used. */
+export async function buildFixtures(options = {}) {
+  const kdf = {
+    kdf: options.kdf ?? 0,
+    kdfIterations: options.kdfIterations ?? ITERATIONS,
+    kdfMemory: options.kdfMemory ?? null,
+    kdfParallelism: options.kdfParallelism ?? null,
+  }
+  const password = options.password ?? PASSWORD
+  const masterKey = await serverMasterKey(password, kdf)
+  if (!masterKey) return null
+  const masterStretch = stretchKey(masterKey)
+
+  const userKeyRaw = options.userKeyV2 ? randomBytes(32) : randomBytes(64)
+  const userKey = stretchKey(userKeyRaw)
+  const encryptedUserKey = encryptBytes(userKeyRaw, masterStretch, 2)
+
+  // Organizations: the org symmetric key is RSA-OAEP wrapped with the account's
+  // public key, and each org cipher wraps its own item key with the org key.
+  const orgKeyRaw = randomBytes(64)
+  const orgKey = stretchKey(orgKeyRaw)
+  const { publicKey: rsaPublicKey, privateKey: rsaPrivateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const privateKeyDer = rsaPrivateKey.export({ type: 'pkcs8', format: 'der' })
+  const publicKeyDer = rsaPublicKey.export({ type: 'pkcs1', format: 'der' })
+  const orgItemKeyRaw = randomBytes(64)
+  const orgItemKey = stretchKey(orgItemKeyRaw)
+  const legacyKey = { enc: userKey.enc, mac: null }
+
+  const ciphers = [
+    {
+      id: 'cipher-github',
+      type: 1,
+      name: encryptString('GitHub 工作账号', userKey),
+      notes: encryptString('SSH 部署密钥在 CI 里', userKey),
+      favorite: true,
+      folderId: 'folder-work',
+      login: {
+        username: encryptString('octocat@jindom.cc', userKey),
+        password: encryptString('gh-p@ssw0rd-42', userKey),
+        totp: encryptString(RFC_URI, userKey),
+        uris: [{ uri: encryptString('https://github.com/login', userKey) }],
+      },
+      fields: [
+        { name: encryptString('租户', userKey), value: encryptString('jindom', userKey), type: 0 },
+        { name: encryptString('API Token', userKey), value: encryptString('tok_live_abc123', userKey), type: 1 },
+      ],
+      revisionDate: '2026-01-02T03:04:05.000Z',
+    },
+    {
+      id: 'cipher-db',
+      type: 2,
+      name: encryptString('生产数据库口令', userKey),
+      notes: encryptString('postgres://app:S3cret-DB-Pass@10.0.0.7:5432/prod', userKey),
+      login: null,
+      fields: [],
+      revisionDate: '2026-01-03T03:04:05.000Z',
+    },
+    {
+      id: 'cipher-org',
+      type: 1,
+      organizationId: 'org-1',
+      collectionIds: ['col-1'],
+      key: encryptBytes(orgItemKeyRaw, orgKey),
+      name: encryptString('共享部署账号', orgItemKey),
+      login: {
+        username: encryptString('deploy-bot', orgItemKey),
+        password: encryptString('deploy-secret-9', orgItemKey),
+        uris: [{ uri: encryptString('https://deploy.jindom.cc', orgItemKey) }],
+      },
+      fields: [{ name: encryptString('环境', orgItemKey), value: encryptString('prod', orgItemKey), type: 0 }],
+      revisionDate: '2026-01-04T03:04:05.000Z',
+    },
+    {
+      id: 'cipher-legacy',
+      type: 1,
+      name: encryptString('老式加密条目', userKey),
+      login: {
+        username: encryptString('legacy-user', legacyKey, 0),
+        password: encryptString('legacy-pass', legacyKey, 0),
+      },
+      fields: [],
+      revisionDate: '2026-01-05T03:04:05.000Z',
+    },
+  ]
+
+  // Truly legacy type-0 (AES-CBC without MAC) cipher strings: our client still
+  // reads them, while modern official clients dropped support, so the interop
+  // fixture turns them off.
+  if (options.legacyCipher === false) {
+    const index = ciphers.findIndex((cipher) => cipher.id === 'cipher-legacy')
+    if (index >= 0) ciphers.splice(index, 1)
+  }
+
+  if (options.orphanCipher) {
+    // A cipher from an organization whose key this account cannot unwrap.
+    ciphers.push({
+      id: 'cipher-orphan-org',
+      type: 1,
+      organizationId: 'org-unreachable',
+      collectionIds: [],
+      key: encryptBytes(randomBytes(64), stretchKey(randomBytes(64))),
+      name: encryptString('外部组织条目', stretchKey(randomBytes(64))),
+      login: { username: null, password: null, uris: [] },
+      fields: [],
+      revisionDate: '2026-01-06T03:04:05.000Z',
+    })
+  }
+
+  return {
+    kdf,
+    password,
+    masterKey,
+    masterPasswordHash: hashMasterPassword(masterKey, password),
+    encryptedUserKey,
+    apiClientId: options.apiClientId ?? `user.${randomUUID()}`,
+    apiClientSecret: options.apiClientSecret ?? 'mock-api-secret',
+    syncPayload: {
+      profile: {
+        id: USER_ID,
+        name: 'DSH Test',
+        email: EMAIL,
+        emailVerified: true,
+        premium: true,
+        premiumFromOrganization: false,
+        culture: 'zh-CN',
+        twoFactorEnabled: false,
+        securityStamp: 'mock-security-stamp',
+        forcePasswordReset: false,
+        providers: [],
+        key: encryptedUserKey,
+        privateKey: encryptBytes(privateKeyDer, userKey),
+        publicKey: publicKeyDer.toString('base64'),
+        kdf: kdf.kdf,
+        kdfIterations: kdf.kdfIterations,
+        organizations: [
+          {
+            id: 'org-1',
+            name: encryptString('Jindom 运维', userKey),
+            key: rsaWrap(orgKeyRaw, rsaPublicKey),
+            status: 2,
+            type: 0,
+            enabled: true,
+            usePolicies: true,
+            useGroups: false,
+            useDirectory: false,
+            useEvents: false,
+            useTotp: true,
+            use2fa: true,
+            useApi: true,
+            useResetPassword: false,
+            usersGetPremium: false,
+            selfHost: true,
+            seats: 5,
+            maxCollections: null,
+            maxStorageGb: 1,
+            hasPublicAndPrivateKeys: true,
+            providerId: null,
+            providerName: null,
+          },
+        ],
+      },
+      ciphers,
+      folders: [{ id: 'folder-work', name: encryptString('工作', userKey), revisionDate: '2026-01-01T00:00:00.000Z' }],
+      collections: [{ id: 'col-1', organizationId: 'org-1', name: encryptString('运维', userKey) }],
+    },
+  }
+}
+
+/**
+ * Start the mock server.
+ * @param {object} [options] - KDF / key-shape options forwarded to {@link buildFixtures}.
+ * @param {number} [options.port] - fixed port (defaults to an ephemeral one).
+ * @param {{key: string, cert: string}} [options.tls] - serve HTTPS (the official CLI refuses http).
+ * @returns {Promise<null | {url: string, port: number, stats: object, fixtures: object, close: () => Promise<void>}>}
+ */
+export async function startMockServer(options = {}) {
+  const fixtures = await buildFixtures(options)
+  if (!fixtures) return null
+  const { kdf, masterPasswordHash, encryptedUserKey, syncPayload, apiClientId, apiClientSecret } = fixtures
+
+  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [] }
+  const tokens = new Map()
+
+  const handler = (req, res) => {
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8')
+      stats.paths.push(`${req.method} ${req.url}`)
+      if (process.env.MOCK_TRACE) console.error(`[mock] ${req.method} ${req.url} ${body.slice(0, 160)}`)
+      const send = (status, payload) => {
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(payload))
+      }
+      const form = new URLSearchParams(body)
+
+      if (req.url.startsWith('/api/config')) {
+        return send(200, { version: 'mock-2026.6.0', server: { name: 'MockVaultwarden' }, environment: {} })
+      }
+
+      // Both the legacy path and the newer `/password` path answer identically.
+      if (req.url.startsWith('/identity/accounts/prelogin')) {
+        let requested = EMAIL
+        try {
+          if (body) requested = JSON.parse(body).email ?? EMAIL
+        } catch {
+          requested = form.get('email') ?? EMAIL
+        }
+        if (String(requested).toLowerCase() !== EMAIL) return send(404, { message: 'not found' })
+        return send(200, {
+          ...kdf,
+          kdfSettings: { iterations: kdf.kdfIterations, kdfType: kdf.kdf },
+          // Newer SDK prelogin shape.
+          kdfConfig: { kdfType: kdf.kdf, iterations: kdf.kdfIterations },
+        })
+      }
+
+      if (req.url.startsWith('/identity/connect/token') && req.method === 'POST') {
+        const grant = form.get('grant_type')
+        stats.tokenGrants.push(grant)
+        const issue = (clientId = 'cli') => {
+          stats.tokenIssued++
+          const deviceId = form.get('deviceIdentifier') ?? 'mock-device'
+          const accessToken = makeAccessToken({ clientId, deviceId })
+          const refreshToken = `refresh-${stats.tokenIssued}`
+          tokens.set(accessToken, refreshToken)
+          return send(200, {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            expires_in: 3600,
+            token_type: 'Bearer',
+            Key: encryptedUserKey,
+            Kdf: kdf.kdf,
+            KdfIterations: kdf.kdfIterations,
+            KdfMemory: kdf.kdfMemory,
+            KdfParallelism: kdf.kdfParallelism,
+            // Newer clients require the master-password unlock data.
+            UserDecryptionOptions: {
+              Object: 'userDecryptionOptions',
+              HasMasterPassword: true,
+              MasterPasswordUnlock: {
+                Salt: EMAIL,
+                Kdf: {
+                  KdfType: kdf.kdf,
+                  Iterations: kdf.kdfIterations,
+                  Memory: kdf.kdfMemory,
+                  Parallelism: kdf.kdfParallelism,
+                },
+                MasterKeyEncryptedUserKey: encryptedUserKey,
+              },
+            },
+          })
+        }
+        if (grant === 'password') {
+          if (String(form.get('username')).toLowerCase() !== EMAIL) {
+            return send(400, { error: 'invalid_grant', error_description: 'Username or password is incorrect' })
+          }
+          if (form.get('password') !== masterPasswordHash) {
+            return send(400, { error: 'invalid_grant', error_description: 'Username or password is incorrect' })
+          }
+          if (!form.get('client_id') || !form.get('deviceIdentifier')) {
+            return send(400, { error: 'invalid_request', error_description: 'missing client_id/deviceIdentifier' })
+          }
+          return issue(form.get('client_id') ?? 'cli')
+        }
+        if (grant === 'client_credentials') {
+          if (form.get('client_id') !== apiClientId || form.get('client_secret') !== apiClientSecret) {
+            return send(400, { error: 'invalid_client', error_description: 'client_id or client_secret is incorrect' })
+          }
+          return issue(form.get('client_id') ?? 'cli')
+        }
+        if (grant === 'refresh_token') {
+          if (![...tokens.values()].includes(form.get('refresh_token'))) {
+            return send(400, { error: 'invalid_grant', error_description: 'refresh token is invalid' })
+          }
+          stats.refreshes++
+          return issue(form.get('client_id') ?? 'cli')
+        }
+        return send(400, { error: 'unsupported_grant_type' })
+      }
+
+      if (req.url.startsWith('/api/accounts/profile')) {
+        const auth = req.headers.authorization ?? ''
+        if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
+        return send(200, syncPayload.profile)
+      }
+
+      if (req.url.startsWith('/api/sync')) {
+        const auth = req.headers.authorization ?? ''
+        if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
+        stats.syncs++
+        return send(200, syncPayload)
+      }
+
+      // Anything else a real client might ask for: answer emptily instead of 404,
+      // so the CLI's post-login bookkeeping does not abort the interop run.
+      if (req.url.startsWith('/api/')) return send(200, {})
+
+      send(404, { message: 'not found' })
+    })
+  }
+
+  const server = options.tls
+    ? createHttpsServer({ key: options.tls.key, cert: options.tls.cert }, handler)
+    : createHttpServer(handler)
+
+  await new Promise((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  return {
+    url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${port}`,
+    port,
+    stats,
+    fixtures,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
