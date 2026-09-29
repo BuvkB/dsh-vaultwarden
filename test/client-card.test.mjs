@@ -129,7 +129,11 @@ function loadModule() {
 }
 
 /** Apply the module against a context whose connection returns `rpc`. */
-async function mountPanel(mod, dictionaries, rpcOrUndefined) {
+async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
+  // The panel keeps a module-level cache across unmounts; each test starts from
+  // a clean slate so one scenario cannot leak into the next. Tests that
+  // deliberately exercise the cache pass { keepCache: true }.
+  if (!options.keepCache) mod.__resetOpenCache?.()
   const registrations = []
   const ctx = {
     effect: (fn) => fn(),
@@ -437,6 +441,42 @@ async function main() {
   await act(async () => {
     hardFail.renderer.unmount()
   })
+
+  // ── reopen performance: a second open must not re-fetch everything ────────
+  // The host unmounts the panel when the dialog closes, so reopening used to
+  // re-run config + session + list + a status probe. A recent read is now
+  // painted from a module-level cache and refreshed behind it.
+  {
+    const cfg = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }
+    const live = { ok: true, value: { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true } }
+    const rpc = makeRpc({ config: () => cfg, session: () => live })
+    const first = await mountPanel(mod, {}, rpc)
+    await act(async () => {
+      await sleep(60)
+    })
+    const firstCalls = rpc.calls.length
+    await act(async () => {
+      first.renderer.unmount()
+    })
+
+    // Reopen without resetting the cache: the list must be painted from it.
+    const before = rpc.calls.filter((call) => call.method === 'list').length
+    const second = await mountPanel(mod, {}, rpc, { keepCache: true })
+    await act(async () => {
+      await sleep(20)
+    })
+    // The cached view is on screen before the refresh resolves.
+    check('a reopen paints the cached list immediately', JSON.stringify(second.renderer.toJSON()).includes('GitHub 工作账号'), `pre-refresh`)
+    check('the first open did real work (baseline)', before >= 1 && firstCalls > 0, `${before}/${firstCalls}`)
+    await act(async () => {
+      await sleep(120)
+    })
+    const after = rpc.calls.filter((call) => call.method === 'list').length
+    check('the reopen still refreshes in the background', after > before, `list calls ${before}→${after}`)
+    await act(async () => {
+      second.renderer.unmount()
+    })
+  }
 
   // ── sign-in flow: credentials first, code screen only after they verify ────
   const signedOutConfig = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }
