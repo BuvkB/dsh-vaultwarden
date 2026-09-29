@@ -12,6 +12,7 @@
  */
 import {
   constants as cryptoConstants,
+  createHash,
   createHmac,
   createCipheriv,
   generateKeyPairSync,
@@ -33,6 +34,34 @@ export const USER_ID = '7f3d9a1e-6c2b-4f5a-9d31-8b0c4e2a5f77'
 // RFC 6238 reference secret ("12345678901234567890" in Base32), 8 digits.
 export const RFC_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
 export const RFC_URI = `otpauth://totp/RFC:test?secret=${RFC_SECRET}&issuer=RFC&algorithm=SHA1&digits=8&period=30`
+
+// ── minimal SignalR-over-WebSocket server (test only) ─────────────────────────
+// Enough of RFC 6455 + the SignalR JSON protocol for the client's live-sync
+// channel: handshake, ping/pong keepalive, and server-pushed ReceiveMessage
+// invocations. No dependency beyond node builtins.
+
+const RS = '\u001e' // SignalR record separator
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+/** Build one unmasked server→client text frame. */
+function wsFrame(payload) {
+  const data = Buffer.from(payload, 'utf8')
+  let header
+  if (data.length < 126) {
+    header = Buffer.from([0x81, data.length])
+  } else if (data.length < 65536) {
+    header = Buffer.alloc(4)
+    header[0] = 0x81
+    header[1] = 126
+    header.writeUInt16BE(data.length, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[0] = 0x81
+    header[1] = 127
+    header.writeBigUInt64BE(BigInt(data.length), 2)
+  }
+  return Buffer.concat([header, data])
+}
 
 function hkdfExpand(prk, info, length) {
   let previous = Buffer.alloc(0)
@@ -229,6 +258,22 @@ export async function buildFixtures(options = {}) {
     })
   }
 
+  if (options.repromptCipher) {
+    // An item with Bitwarden's "re-prompt" flag: clients must not auto-reveal it.
+    ciphers.push({
+      id: 'cipher-reprompt',
+      type: 1,
+      reprompt: 1,
+      name: encryptString('需要重新验证的条目', userKey),
+      login: {
+        username: encryptString('reprompt-user', userKey),
+        password: encryptString('reprompt-pass-9', userKey),
+      },
+      fields: [],
+      revisionDate: '2026-01-07T03:04:05.000Z',
+    })
+  }
+
   return {
     kdf,
     password,
@@ -301,8 +346,10 @@ export async function startMockServer(options = {}) {
   if (!fixtures) return null
   const { kdf, masterPasswordHash, encryptedUserKey, syncPayload, apiClientId, apiClientSecret } = fixtures
 
-  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [] }
+  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [] }
   const tokens = new Map()
+  const hubSockets = new Set()
+  const hubStats = { connections: 0, messages: 0, notifications: 0 }
 
   const handler = (req, res) => {
     const chunks = []
@@ -319,6 +366,17 @@ export async function startMockServer(options = {}) {
 
       if (req.url.startsWith('/api/config')) {
         return send(200, { version: 'mock-2026.6.0', server: { name: 'MockVaultwarden' }, environment: {} })
+      }
+
+      // SignalR negotiate: the hub also accepts a bare access token, but real
+      // clients always negotiate first.
+      if (req.url.startsWith('/notifications/hub/negotiate')) {
+        return send(200, {
+          negotiateVersion: 1,
+          connectionToken: 'mock-connection-token',
+          connectionId: 'mock-connection-id',
+          availableTransports: [{ transport: 'WebSockets', transferFormats: ['Text'] }],
+        })
       }
 
       // Both the legacy path and the newer `/password` path answer identically.
@@ -344,6 +402,7 @@ export async function startMockServer(options = {}) {
         const issue = (clientId = 'cli') => {
           stats.tokenIssued++
           const deviceId = form.get('deviceIdentifier') ?? 'mock-device'
+          stats.deviceIdentifiers.push(deviceId)
           const accessToken = makeAccessToken({ clientId, deviceId })
           const refreshToken = `refresh-${stats.tokenIssued}`
           tokens.set(accessToken, refreshToken)
@@ -415,6 +474,58 @@ export async function startMockServer(options = {}) {
         return send(200, syncPayload)
       }
 
+      // ── cipher mutations (create / update / delete / restore / purge) ──────
+      // The mock stores the encrypted bodies verbatim, so a write-back test
+      // exercises the real encrypt → transport → sync → decrypt round trip.
+      if (req.url.startsWith('/api/ciphers')) {
+        const auth = req.headers.authorization ?? ''
+        if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
+        const ciphers = fixtures.syncPayload.ciphers
+        if (req.method === 'POST' && req.url === '/api/ciphers') {
+          stats.created++
+          const created = {
+            ...JSON.parse(body || '{}'),
+            id: `cipher-created-${stats.created}`,
+            revisionDate: new Date().toISOString(),
+          }
+          ciphers.push(created)
+          stats.mutations.push('create')
+          return send(200, created)
+        }
+        const match = req.url.match(/^\/api\/ciphers\/([^/]+)(\/(delete|restore))?$/)
+        if (match) {
+          const id = decodeURIComponent(match[1])
+          const action = match[2]
+          const index = ciphers.findIndex((cipher) => cipher.id === id)
+          if (index < 0) return send(404, { message: 'Cipher not found' })
+          if (req.method === 'PUT' && !action) {
+            // The real API replaces the whole cipher; merging would leave
+            // stale fields encrypted under the previous per-item key.
+            const updated = { ...JSON.parse(body || '{}'), id, revisionDate: new Date().toISOString() }
+            ciphers[index] = updated
+            stats.mutations.push('update')
+            return send(200, updated)
+          }
+          if (req.method === 'POST' && action === '/delete') {
+            ciphers[index] = { ...ciphers[index], deletedDate: new Date().toISOString() }
+            stats.mutations.push('delete')
+            return send(200, ciphers[index])
+          }
+          if (req.method === 'PUT' && action === '/restore') {
+            const { deletedDate, ...rest } = ciphers[index]
+            ciphers[index] = { ...rest, revisionDate: new Date().toISOString() }
+            stats.mutations.push('restore')
+            return send(200, ciphers[index])
+          }
+          if (req.method === 'DELETE' && !action) {
+            ciphers.splice(index, 1)
+            stats.mutations.push('purge')
+            return send(200, {})
+          }
+        }
+        return send(404, { message: 'not found' })
+      }
+
       // Anything else a real client might ask for: answer emptily instead of 404,
       // so the CLI's post-login bookkeeping does not abort the interop run.
       if (req.url.startsWith('/api/')) return send(200, {})
@@ -427,13 +538,93 @@ export async function startMockServer(options = {}) {
     ? createHttpsServer({ key: options.tls.key, cert: options.tls.cert }, handler)
     : createHttpServer(handler)
 
+  // ── /notifications/hub WebSocket endpoint ──────────────────────────────────
+  server.on('upgrade', (req, socket) => {
+    if (!req.url.startsWith('/notifications/hub')) {
+      socket.destroy()
+      return
+    }
+    const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}${WS_GUID}`).digest('base64')
+    socket.write(
+      [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        '\r\n',
+      ].join('\r\n'),
+    )
+    hubStats.connections++
+    hubSockets.add(socket)
+
+    let buffer = Buffer.alloc(0)
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      for (;;) {
+        if (buffer.length < 2) return
+        const opcode = buffer[0] & 0x0f
+        const masked = (buffer[1] & 0x80) !== 0
+        let length = buffer[1] & 0x7f
+        let offset = 2
+        if (length === 126) {
+          if (buffer.length < 4) return
+          length = buffer.readUInt16BE(2)
+          offset = 4
+        } else if (length === 127) {
+          if (buffer.length < 10) return
+          length = Number(buffer.readBigUInt64BE(2))
+          offset = 10
+        }
+        const maskOffset = offset
+        if (masked) offset += 4
+        if (buffer.length < offset + length) return
+        let payload = buffer.subarray(offset, offset + length)
+        if (masked) {
+          const mask = buffer.subarray(maskOffset, maskOffset + 4)
+          const unmasked = Buffer.alloc(length)
+          for (let i = 0; i < length; i++) unmasked[i] = payload[i] ^ mask[i % 4]
+          payload = unmasked
+        }
+        buffer = buffer.subarray(offset + length)
+        if (opcode === 0x8) {
+          socket.end()
+          return
+        }
+        if (opcode !== 0x1) continue // binary/continuation frames are unused here
+        hubStats.messages++
+        const frame = payload.toString('utf8').split(RS)[0]
+        let message
+        try {
+          message = JSON.parse(frame)
+        } catch {
+          continue
+        }
+        if (message?.protocol === 'json') {
+          socket.write(wsFrame('{}' + RS)) // SignalR handshake ack
+        } else if (message?.type === 6) {
+          socket.write(wsFrame(JSON.stringify({ type: 6 }) + RS)) // keepalive ping → pong
+        }
+      }
+    })
+    const drop = () => hubSockets.delete(socket)
+    socket.on('close', drop)
+    socket.on('error', drop)
+  })
+
   await new Promise((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve))
   const { port } = server.address()
   return {
     url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${port}`,
     port,
     stats,
+    hubStats,
     fixtures,
+    /** Push a Bitwarden NotificationType to every connected hub client. */
+    notify: (type = 1, extra = {}) => {
+      hubStats.notifications++
+      const message = JSON.stringify({ type: 1, target: 'ReceiveMessage', arguments: [{ Type: type, ...extra }] }) + RS
+      for (const socket of hubSockets) socket.write(wsFrame(message))
+    },
     close: () => new Promise((resolve) => server.close(resolve)),
   }
 }

@@ -21,6 +21,7 @@ DSH_HOME_DIR="${DSH_HOME:-$HOME/.dsh}"
 CANDIDATES=(
   "$DSH_HOME_DIR/profiles/node_modules"
   "$DSH_HOME_DIR/profiles/web/node_modules"
+  "/home/tinyog/.dsh-runtime/lib/node_modules/@deepseek-ai/dsh/node_modules"
   "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules"
 )
 DEP_ROOT=""
@@ -81,6 +82,15 @@ fi
 if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== offline end-to-end test (mock Vaultwarden) ==="
   node test/mock-e2e.test.mjs
+
+  echo "=== live sync test (WebSocket notifications) ==="
+  node test/live-sync.test.mjs
+
+  echo "=== http api test (browser-half routes) ==="
+  node test/api.test.mjs
+
+  echo "=== cipher write-back test ==="
+  node test/mutations.test.mjs
 
   # Cross-implementation check against the official Bitwarden CLI. It skips
   # itself (exit 0) when the CLI or openssl is unavailable.

@@ -1,7 +1,7 @@
 {
-  "name": "@dsh-external/dsh-bitwarden",
-  "version": "0.1.0",
-  "description": "Bitwarden/Vaultwarden credentials in every DSH session: vault tools + proactive prompt guidance + a settings card for the master password.",
+  "name": "dsh-vaultwarden",
+  "version": "0.2.0",
+  "description": "Vaultwarden/Bitwarden real-time sync for DeepSeek Harness: WebSocket push notifications, incremental vault sync, read/write tools and an entry browser panel. Forked from Jindom/dsh-bitwarden.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -31,7 +31,10 @@
     "credentials",
     "secrets",
     "vault",
-    "totp"
+    "totp",
+    "sync",
+    "realtime",
+    "websocket"
   ],
   "scripts": {
     "build": "bash scripts/build.sh",
