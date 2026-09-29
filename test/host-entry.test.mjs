@@ -115,6 +115,27 @@ async function main() {
   const { VaultGateway } = await import('../lib/gateway.js')
   const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
   check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'twoFactor', 'submitTwoFactor'].every((name) => markers.includes(name)), markers.join(','))
+  check('every Remote method has a source-mode-safe signature', (() => {
+    // The gateway's SRC mode parses the parameter list as plain identifiers:
+    // defaults, destructuring and rest are rejected at call time.
+    const isPlain = (fn) => {
+      const source = fn.toString()
+      const open = source.indexOf('(')
+      const close = source.indexOf(')', open + 1)
+      if (open < 0 || close < 0) return false
+      const body = source.slice(open + 1, close).trim()
+      if (body === '') return true
+      const parts = body.split(',').map((part) => part.trim())
+      const seen = new Set()
+      for (const part of parts) {
+        if (!/^[$A-Z_a-z][$\w]*$/.test(part) || seen.has(part)) return false
+        seen.add(part)
+      }
+      return true
+    }
+    const offenders = markers.filter((name) => !isPlain(VaultGateway.prototype[name]))
+    return offenders.length === 0
+  })(), markers.join(','))
   check('gateway binds the vw namespace', Object.create(VaultGateway.prototype) instanceof Object && VaultGateway.name === 'VaultGateway')
 
   // ── degraded configuration must not throw ───────────────────────────────────
