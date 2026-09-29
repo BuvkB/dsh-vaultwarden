@@ -9,11 +9,11 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → 增量 `/api/sync` + 解密换缓存；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询；429 限流自动退避 |
+| 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → 增量 `/api/sync` + 解密换缓存；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
 | 7 个全局工具 | `bitwarden_find`（检索，不含密码）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段）、`bitwarden_status`（配置/连通/解锁/同步模式）、`bitwarden_sync`（强制同步）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
 | 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查凭据库，而不是先问用户 |
 | 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：9 个字段（服务器/邮箱/主密码/API 密钥/同步选项/权限档），密钥字段为只写 |
-| 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护 |
+| 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
 | 认证通道 | 面板经 `/api` connection RPC 取数（`vw/*` 命名空间）——**走操作者已认证会话**，插件不自建 HTTP 路由 |
 
 插件直连服务器 REST API（`/identity/accounts/prelogin`、`/identity/connect/token`、`/api/sync`、`/api/ciphers*`），
@@ -34,7 +34,7 @@
 | `masterPassword` | 主密码（secret）。用于派生主密钥、解密保险库，只存本机 `settings.yaml` |
 | `apiKeyClientId` / `apiKeyClientSecret` | 可选。Bitwarden 网页端 → 账户设置 → 安全 → 密钥；填了走 API 密钥登录，**可绕过两步验证** |
 | `websocket` | 启用 WebSocket 实时通知（默认开） |
-| `pollIntervalSeconds` | WebSocket 不可用时的轮询间隔（默认 60 秒，最小 5） |
+| `pollIntervalSeconds` | WebSocket 不可用时的兜底轮询间隔（默认 300 秒，最小 30）。WebSocket 正常时用不到，徽标可点击手动同步 |
 | `cacheMinutes` | 解锁后的内存缓存时长（默认 30 分钟） |
 | `deviceIdentifier` | 可选设备标识。官方桌面/浏览器客户端会持久化稳定值；**留空按「服务器+邮箱」确定性派生，不写盘** |
 | `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（每次写回需用户确认）/ `auto`（直接写回）。仅个人条目，组织条目明确报错 |
@@ -108,18 +108,18 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 181 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 186 项）
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
 | `test/mock-e2e.test.mjs`（38） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
-| `test/live-sync.test.mjs`（16） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 |
+| `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
-| `test/host-entry.test.mjs`（20） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
+| `test/host-entry.test.mjs`（21） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
 | `test/gateway-flow.test.mjs`（20） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 落盘与会话顺序 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（49） | 条目面板（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（52） | 条目面板 + 徽标手动同步（react-test-renderer + RPC 桩） |
 
 mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
 

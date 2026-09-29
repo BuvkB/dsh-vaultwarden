@@ -99,11 +99,12 @@ async function main() {
   // 4. polling when WebSocket is disabled --------------------------------------
   const poller = new VaultClient(settingsFor(server, { websocket: false }))
   await poller.unlock()
-  const polling = poller.startLiveSync({ pollIntervalMs: 5000, websocket: false })
+  const polling = poller.startLiveSync({ pollIntervalMs: 2000, minPollIntervalMs: 1000, websocket: false })
   check('websocket disabled → polling mode', polling.mode === 'polling')
   const pollSyncs = server.stats.syncs
   const polled = await waitFor(() => server.stats.syncs > pollSyncs, { timeout: 9000 })
   check('polling re-syncs on its interval', polled, `syncs ${pollSyncs}→${server.stats.syncs}`)
+  check('the poll floor is enforced by default', new VaultClient(settingsFor(server)).startLiveSync({ websocket: false }).pollIntervalMs >= 30000, 'default floor')
   poller.stopLiveSync()
 
   // 5. hub unreachable (proxy blocks the upgrade) → polling ---------------------

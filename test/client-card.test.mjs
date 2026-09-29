@@ -185,6 +185,20 @@ async function main() {
 
   check('panel loads the vault list over vw/list', text().includes('GitHub 工作账号') && text().includes('生产数据库口令'))
   check('panel shows the sync chip', text().includes('实时同步'))
+  // The chip is also the manual-sync control and carries a hover tooltip.
+  {
+    const chip = renderer.root.findAllByType('button').find((node) => /实时同步|轮询|同步已关闭/.test(String(node.props.children?.[1] ?? '')))
+    check('the sync chip is a clickable control', Boolean(chip) && chip.props.type === 'button', chip ? String(chip.props.children?.[1]) : 'not found')
+    check('the sync chip carries a tooltip', Boolean(chip?.props.title) && /同步方式/.test(chip.props.title), String(chip?.props.title).slice(0, 60))
+    const syncCallsBefore = rpc.calls.filter((call) => call.method === 'sync').length
+    await act(async () => {
+      chip.props.onClick()
+    })
+    await act(async () => {
+      await sleep(50)
+    })
+    check('clicking the chip triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
+  }
   check('panel shows the vault size', /共 3 条/.test(text()))
   check('list renders one option per entry', rows().length === 3, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
