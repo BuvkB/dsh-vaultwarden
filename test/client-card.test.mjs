@@ -53,6 +53,17 @@ const check = (label, condition, detail = '') => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // ── canned RPC payloads ───────────────────────────────────────────────────────
+const ITEMS = [
+  { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: ['https://github.com/login'], folder: '工作', collections: [], hasTotp: true, hasNotes: true, customFields: ['租户'], favorite: true },
+  { id: 'item-2', name: '生产数据库口令', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
+  { id: 'item-3', name: '需要重新验证的条目', type: 'login', username: 'reprompt-user', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
+  // The shape most real vaults are full of: an entry named after a host, whose
+  // first character is a digit. Its tile must come from the username.
+  { id: 'item-4', name: '10.0.0.10', type: 'login', username: 'demo-user', uris: ['https://10.0.0.10'], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
+]
+/** Derived, so adding a fixture entry cannot leave a count assertion stale. */
+const ITEM_COUNT = ITEMS.length
+
 const STATUS_REPORT = {
   configured: true,
   authMode: 'password',
@@ -61,13 +72,8 @@ const STATUS_REPORT = {
   cacheMinutes: 30,
   liveSync: { mode: 'websocket', connected: true, pollIntervalMs: 60000, lastSyncAt: new Date().toISOString(), lastError: null },
   unlocked: true,
-  items: 3,
+  items: ITEM_COUNT,
 }
-const ITEMS = [
-  { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: ['https://github.com/login'], folder: '工作', collections: [], hasTotp: true, hasNotes: true, customFields: ['租户'], favorite: true },
-  { id: 'item-2', name: '生产数据库口令', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
-  { id: 'item-3', name: '需要重新验证的条目', type: 'login', username: 'reprompt-user', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
-]
 const REVEALS = {
   'item-1': { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', password: 'gh-p@ssw0rd-42', totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', uris: ['https://github.com/login'], notes: 'SSH 密钥在 CI 里', fields: [{ name: '租户', value: 'jindom' }], folder: '工作', collections: [] },
   'item-3': { repromptRequired: true, id: 'item-3', name: '需要重新验证的条目', type: 'login' },
@@ -183,11 +189,34 @@ async function main() {
   check('registers the entry panel as a settings page', Boolean(registration) && registration.options.id === 'vaultwarden', JSON.stringify(registration?.options))
   check('panel label comes from the dictionary', registration.options.label() === '凭据库')
 
+  // ── compact header (reported: the title and search box were noisy) ───────
+  // The title stays short; Vaultwarden support rides alongside it in small
+  // type. The search placeholder used to carry the keyboard shortcuts and was
+  // truncated on a phone, so it is short now and the shortcuts moved into the
+  // input tooltip.
+  {
+    const headerText = JSON.stringify(renderer.toJSON())
+    check('the panel title stays short', headerText.includes('Bitwarden 凭据库') && !headerText.includes('Bitwarden / Vaultwarden 凭据库'))
+    check('the title notes Vaultwarden alongside Bitwarden', headerText.includes('支持 Bitwarden / Vaultwarden'))
+    const search = renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    check('the search placeholder is short', search?.props.placeholder === '搜索名称、用户名或网址', String(search?.props.placeholder))
+    check('the keyboard shortcuts moved into the tooltip', String(search?.props.title).includes('Esc'))
+    check('the search box carries the narrow-screen hook', search?.props['data-vw-search'] === '')
+
+  }
+
   const text = () => JSON.stringify(renderer.toJSON())
   const buttons = () => renderer.root.findAllByType('button')
   const rows = () => buttons().filter((node) => node.props.role === 'option')
 
   check('panel loads the vault list over vw/list', text().includes('GitHub 工作账号') && text().includes('生产数据库口令'))
+
+  // A leading digit identifies nothing: entries named after an IP address all
+  // showed the same "1" tile. Such an entry now takes its glyph from the
+  // username, so the list reads as distinct rows at a glance.
+  const monograms = rows().map((row) => String(row.children[0]?.children?.[0] ?? ''))
+  check('no list entry is reduced to its leading digit', !monograms.includes('1'), JSON.stringify(monograms))
+  check('an IP-named entry takes its glyph from the username', monograms[3] === 'D', JSON.stringify(monograms))
   check('panel shows the sync chip', text().includes('实时同步'))
   // The chip is also the manual-sync control and carries a hover tooltip.
   {
@@ -203,8 +232,8 @@ async function main() {
     })
     check('clicking the chip triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
   }
-  check('panel shows the vault size', /共 3 条/.test(text()))
-  check('list renders one option per entry', rows().length === 3, `rows=${rows().length}`)
+  check('panel shows the vault size', text().includes(`共 ${ITEM_COUNT} 条`))
+  check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
 
   // search: debounced reload
@@ -250,7 +279,7 @@ async function main() {
   await act(async () => {
     await sleep(50)
   })
-  check('going back restores the list', rows().length === 3, `rows=${rows().length}`)
+  check('going back restores the list', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   await act(async () => {
     rows()[2].props.onClick()
   })
@@ -556,7 +585,7 @@ async function main() {
   })
 
   // ── no matches ────────────────────────────────────────────────────────────
-  const empty = await mountPanel(mod, {}, makeRpc({ list: () => ({ ok: true, value: { query: 'zzz', matched: 0, returned: 0, vaultItems: 3, items: [] } }) }))
+  const empty = await mountPanel(mod, {}, makeRpc({ list: () => ({ ok: true, value: { query: 'zzz', matched: 0, returned: 0, vaultItems: ITEM_COUNT, items: [] } }) }))
   check('no-match list renders an actionable empty state', JSON.stringify(empty.renderer.toJSON()).includes('没有匹配的条目'))
   await act(async () => {
     empty.renderer.unmount()

@@ -109,7 +109,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.2   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.3   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -118,7 +118,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 214 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 221 项）
 ```
 
 | 套件 | 覆盖 |
