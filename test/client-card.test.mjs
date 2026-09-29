@@ -299,8 +299,28 @@ async function main() {
   const twoFactorCall = twoFactorRpc.calls.find((call) => call.method === 'submitTwoFactor')
   check('two-factor code is submitted through vw/submitTwoFactor', Boolean(twoFactorCall) && twoFactorCall.args.code === '123456', JSON.stringify(twoFactorCall?.args))
   check('the continuation token travels back with the code', twoFactorCall?.args.token === 'mock-continuation-token', JSON.stringify(twoFactorCall?.args))
+  // Escape hatch: an expired challenge must not be a dead end.
+  const restartButton = () => challenged.renderer.root.findAllByType('button').find((node) => node.props.children === '重新获取验证码 / 换个账号')
+  check('two-factor form offers a restart escape hatch', Boolean(restartButton()))
+  await act(async () => {
+    restartButton().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  check('restart clears the host session through vw/reset', twoFactorRpc.calls.some((call) => call.method === 'reset'))
   await act(async () => {
     challenged.renderer.unmount()
+  })
+
+  // A hard failure keeps a way back too (wrong password, expired challenge…).
+  const hardFailError = { ok: false, error: { code: 'bad_credentials', message: '登录失败：邮箱或主密码不正确' } }
+  const hardFail = await mountPanel(mod, {}, makeRpc({ config: () => ({ ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }), list: () => hardFailError, status: () => hardFailError }))
+  const hardFailText = JSON.stringify(hardFail.renderer.toJSON())
+  check('a failed login explains the failure', hardFailText.includes('登录失败'))
+  check('a failed login still offers a way back', hardFailText.includes('重新获取验证码 / 换个账号'))
+  await act(async () => {
+    hardFail.renderer.unmount()
   })
 
   // ── no matches ────────────────────────────────────────────────────────────

@@ -226,6 +226,25 @@ async function main() {
   check('a restarted host re-issues a challenge token', carriedToken === TWO_FACTOR_TOKEN, String(carriedToken))
   const restartedToken = await restartedClient.loginWithTwoFactor({ code: TWO_FACTOR_CODE, token: carriedToken })
   check('an explicitly carried token completes the login after a restart', Boolean(restartedToken.accessToken) && twoFactorServer.stats.twoFactorAccepted === 2)
+
+  // The UI's escape hatch: reset() must clear a stale challenge so the next
+  // attempt starts a clean login instead of re-surfacing the dead one.
+  const staleClient = new VaultClient(settingsFor(twoFactorServer))
+  try {
+    await staleClient.unlock()
+  } catch {
+    /* expected challenge */
+  }
+  check('a stale challenge is pending before reset', staleClient.twoFactorPending !== null)
+  staleClient.reset()
+  check('reset clears the pending challenge', staleClient.twoFactorPending === null && staleClient.token === null && staleClient.vault === null)
+  let freshChallenge = null
+  try {
+    await staleClient.unlock()
+  } catch (error) {
+    freshChallenge = error
+  }
+  check('after reset a fresh challenge can be issued', freshChallenge?.code === 'two_factor_required', String(freshChallenge?.code))
   await twoFactorServer.close()
 
   await server.close()
