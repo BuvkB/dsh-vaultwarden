@@ -34,17 +34,21 @@ async function main() {
   const tools = []
   const sections = []
   const settingsScopes = []
-  const routes = []
+  const plugins = []
   const injected = []
   const effects = []
 
-  const AVAILABLE = new Set(['settings', 'tools', 'systemPrompt', 'webServer', 'settingsScope', 'slots', 'locale'])
+  const AVAILABLE = new Set(['settings', 'tools', 'systemPrompt', 'webServer', 'slots', 'locale'])
   const fakeCtx = {
     effect: (fn, label) => {
       effects.push(label)
       return fn()
     },
     on: () => () => {},
+    plugin: (plugin, config) => {
+      plugins.push({ plugin, config })
+      return { name: plugin?.name }
+    },
     systemPrompt: {
       section: (spec) => {
         sections.push(spec)
@@ -79,11 +83,9 @@ async function main() {
           inject: () => {},
           register: () => () => {},
         },
-        settingsScope: null,
         webServer: {
           register: (route) => {
-            routes.push(route)
-            return () => {}
+            throw new Error(`plugin must not register an HTTP route: ${JSON.stringify(route)}`)
           },
         },
       }
@@ -97,11 +99,18 @@ async function main() {
   check('registers the 7 credential tools', ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync', 'bitwarden_create', 'bitwarden_update', 'bitwarden_delete'].every((n) => toolNames.includes(n)), toolNames.join(','))
   check('find tool describes the no-password rule', /不含密码/.test(tools.find((t) => t.name === 'bitwarden_find').description))
   check('create tool requires a name', (tools.find((t) => t.name === 'bitwarden_create').parameters.required ?? []).includes('name'))
-  check('injects the optional host services it needs', injected.includes('settings') && injected.includes('webServer'), injected.join(','))
+  check('injects the optional settings service it needs', injected.includes('settings'), injected.join(','))
   check('registers the settings namespace', settingsScopes[0]?.ns === 'bitwarden')
   check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /实时同步/.test(section.text)))
   check('registers effects with labels (cleanup contract)', effects.length >= 8 && effects.every((label) => typeof label === 'string' && label.startsWith('dsh-vaultwarden:')), `${effects.length} effects`)
-  check('registers the same-origin HTTP API route', routes.some((route) => route.kind === 'prefix' && route.path === '/dsh-vaultwarden/api' && typeof route.handler === 'function'), JSON.stringify(routes))
+  check('mounts the Remote gateway instead of an HTTP route', plugins.length === 1 && plugins[0].plugin?.name === 'VaultGateway' && typeof plugins[0].config?.getClient === 'function', JSON.stringify(plugins.map((entry) => entry.plugin?.name)))
+
+  // ── the gateway's wire surface ──────────────────────────────────────────────
+  const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
+  const { VaultGateway } = await import('../lib/gateway.js')
+  const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
+  check('gateway exposes exactly the vw methods', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove'].every((name) => markers.includes(name)), markers.join(','))
+  check('gateway binds the vw namespace', Object.create(VaultGateway.prototype) instanceof Object && VaultGateway.name === 'VaultGateway')
 
   // ── degraded configuration must not throw ───────────────────────────────────
   const emptyCtx = { ...fakeCtx, tools: { register: () => () => {} }, systemPrompt: { section: () => () => {} } }

@@ -11,9 +11,9 @@
 | 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → 增量 `/api/sync` + 解密换缓存；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询；429 限流自动退避 |
 | 7 个全局工具 | `bitwarden_find`（检索，不含密码）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段）、`bitwarden_status`（配置/连通/解锁/同步模式）、`bitwarden_sync`（强制同步）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
 | 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查凭据库，而不是先问用户 |
-| 设置卡片 | 设置 → 插件 → 插件配置里的 Bitwarden 卡片：连接/认证/同步三节 9 个字段 + 同步状态行（实时/轮询/关闭 + 圆点 + 相对同步时间） |
+| 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：9 个字段（服务器/邮箱/主密码/API 密钥/同步选项/权限档），密钥字段为只写 |
 | 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护 |
-| 同源 HTTP API | `/dsh-vaultwarden/api/{status,list,reveal,totp,sync}`，仅供浏览器半边调用，**仅接受本机回环请求** |
+| 认证通道 | 面板经 `/api` connection RPC 取数（`vw/*` 命名空间）——**走操作者已认证会话**，插件不自建 HTTP 路由 |
 
 插件直连服务器 REST API（`/identity/accounts/prelogin`、`/identity/connect/token`、`/api/sync`、`/api/ciphers*`），
 **不依赖 `bw` CLI**；除可选的 `hash-wasm`（Argon2id KDF）外全部使用 Node 内置模块。
@@ -77,7 +77,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 ## 安全说明
 
 - 主密码、用户密钥、解密后的条目**只存在内存**，不写盘、不打日志；插件只持久化用户填写的配置。
-- 同源 HTTP API 只接受**本机回环**请求（web server 自身不带鉴权，路由自担请求策略）。
+- 配置表单由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）；面板数据走 `/api` connection RPC（已认证会话），**没有绕过鉴权的自建路由**。
 - 工具返回的明文凭据会进入会话上下文（这是"让模型能用密码"的前提）。提示词要求模型不要回显、不要写入文件。
 - 写回默认关闭（`accessMode: readonly`）；开启后也只能写个人条目，组织条目明确报错。
 - 与本地 `dsh-vault` 插件**无标识冲突**（条目 id / 工具名 / 设置命名空间 / 设置页 id 均不同）：本插件是 `dsh-vaultwarden` ↔ `bitwarden_*` ↔ `bitwarden` ↔ `vaultwarden`，dsh-vault 是 `vault` ↔ `vault_*` ↔ `settings.vault` ↔ `vault`。
@@ -110,9 +110,9 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 五套离线测试
 node test/mock-e2e.test.mjs    # 协议/加密/检索/TOTP/刷新/API key（23 项）
 node test/live-sync.test.mjs   # WebSocket 握手/推送同步/防抖/LogOut/降级轮询（16 项）
-node test/api.test.mjs         # 同源 HTTP API 全路由 + 回环策略（19 项）
 node test/mutations.test.mjs   # 写回 增改删恢复 + per-item key 往返（22 项）
-node test/client-card.test.mjs # 设置卡片 + 条目面板（37 项，react-test-renderer）
+node test/host-entry.test.mjs  # Host 入口 + Remote 网关线面（16 项）
+node test/client-card.test.mjs # 条目面板（24 项，react-test-renderer + RPC 桩）
 ```
 
 mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub），并可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。

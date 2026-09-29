@@ -50,7 +50,7 @@ link_pkg() {
   ' "node_modules/$name" "$DEP_ROOT/$name"
 }
 
-for pkg in @deepseek-ai/dsh-tools @deepseek-ai/schemastery @deepseek-ai/dsh-llm; do
+for pkg in @deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/schemastery @deepseek-ai/dsh-llm; do
   link_pkg "$pkg"
   echo "  linked $pkg"
 done
@@ -85,9 +85,6 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
 
   echo "=== live sync test (WebSocket notifications) ==="
   node test/live-sync.test.mjs
-
-  echo "=== http api test (browser-half routes) ==="
-  node test/api.test.mjs
 
   echo "=== cipher write-back test ==="
   node test/mutations.test.mjs

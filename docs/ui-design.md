@@ -1,33 +1,38 @@
 # 前端设计说明（dsh-vaultwarden 浏览器半边）
 
-> 对应代码：`lib/client.js`（设置卡片 + 条目浏览面板）、`test/client-card.test.mjs`（37 项）。
+> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（24 项）。
 > 设计基线：与宿主设置页同水准；明暗双主题；仅 `--dsw-alias-*` 令牌；可访问性达标。
 
-## 1. 两个界面，两个槽位
+## 1. 一个界面，一个槽位
 
 | 界面 | 槽位 | 内容 |
 |---|---|---|
-| 配置卡片 | `settings.plugin.item`（key = `bitwarden`） | 服务器/账号/密钥/同步控制，9 个字段分三节 |
 | 条目浏览面板 | `settings.section`（id = `vaultwarden`，order 30） | 同步后的凭据列表 + 详情 + 复制 + TOTP 倒计时 |
+| 配置表单 | 宿主从插件 `Config` schema 派生 | 服务器/账号/密钥/同步控制/权限档，密钥字段只写 |
 
 选型依据（`cordis_inspect_query` → Slots.listSubTree）：
 - `settings.section` 是 list 槽、`replaceRisk: none`、**有分配空间**，插件获得自己的设置页，不与任何第三方插件耦合（不依赖 dsh-better-sidebar 之类）。
-- `settings.plugin.item` 是上游已在用的键位槽，配置卡片继续留在「插件配置」里。
+- 0.2.0 起配置表单由宿主按 `Config` schema 渲染，插件不再自绘卡片；旧的 `settingsScope` / `settings.plugin.item` 已被移除，继续用它们会导致前端整块不注册（曾实测踩到）。
 - 会话内表面（composer dock / 右栏 tab）都要求 session 作用域或依赖其他插件，v1 不做。
 
 ## 2. 数据通道
 
-浏览器只走同源 HTTP（Host 侧 `lib/api.js`，仅回环、no-store）：
+浏览器只走 `/api` connection RPC（`vw/*` 命名空间，`connection.rpc.call('/api','vw/<method>',{args})`），
+**承载操作者已认证会话**——与 dsh-vault 相同的受信通道；插件刻意不自建 HTTP 路由（那会绕过鉴权，实测裸请求能拿到 200）。
 
 ```
-GET  /dsh-vaultwarden/api/status             配置/解锁/同步状态
-GET  /dsh-vaultwarden/api/list?query=&limit= 条目摘要（永不含密码）
-POST /dsh-vaultwarden/api/reveal             单条字段（reprompt 受 confirm 控制）
-POST /dsh-vaultwarden/api/totp               当前 TOTP + 倒计时
-POST /dsh-vaultwarden/api/sync               强制同步
+vw/status   配置/解锁/同步状态
+vw/list     条目摘要（永不含密码；空查询=全量）
+vw/reveal   单条字段（reprompt 受 confirm 控制）
+vw/totp     当前 TOTP + 倒计时
+vw/sync     强制同步
+vw/create · vw/update · vw/remove   写回（受 Config.accessMode 约束）
 ```
 
-备选方案记录：`ctx.remote.<ns>`（Typert Remote）的客户端命名空间由 `@deepseek-ai/dsh-api-remotes` 编译期固定，第三方插件无法新增；`ctx.remote.commands.execute` 需要 Agent 作用域，设置页场景不总具备。dsh-vault 走的是 `connection.rpc.call('/api', 'vault/*')` + 自建 Host gateway，本插件选择自注册 HTTP 路由，依赖更少、已测试覆盖。
+Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`）实现。纯 JS 无法使用装饰器语法
+（Node 22 不解析），标记由 `markRemote()` 按协议描述符格式在运行时打上，`remoteMethods()` 可回读验证
+（host-entry 测试即断言这 8 个线面方法）。配置表单不自绘：0.2.0 起宿主从插件 `Config` schema 派生
+（旧版的 `settingsScope` / `settings.plugin.item` 已移除，用它会导致前端整块不注册）。
 
 ## 3. 设计体系
 
@@ -58,10 +63,10 @@ POST /dsh-vaultwarden/api/sync               强制同步
 
 ## 5. 安全姿态
 
-- 列表接口永不返回密码；密码只在用户主动打开条目并点「显示」后出现，且只进 DOM。
-- reprompt 条目遵循 Bitwarden 官方客户端约定，不自动解密展示。
-- 主密码/API secret 在 GUI 为只写字段（留空=不修改），已存值不回显。
-- 面板所有请求走同源 + 仅回环的 HTTP 路由（Host 侧强制）。
+- 列表数据（`vw/list`）永不返回密码；密码只在用户主动打开条目并点「显示」后出现，且只进 DOM。
+- reprompt 条目遵循 Bitwarden 官方客户端约定，不自动解密展示，需显式 `confirm`。
+- 主密码/API secret 在宿主派生的表单里是只写字段（留空=不修改），已存值不回显。
+- 面板所有数据走 `/api` connection RPC —— 该通道自带操作者鉴权，插件不注册任何自有 HTTP 路由。
 
 ## 6. 自验
 
