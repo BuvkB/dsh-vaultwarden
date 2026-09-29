@@ -2,7 +2,8 @@
 
 把自建 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：任何新建会话（无论 workspace）都会自动知道"密码可以去 Bitwarden 里读"；服务器端任何增删改都会通过 WebSocket **实时**反映到本地，无需手动刷新。
 
-> Forked from [Jindom/dsh-bitwarden](https://github.com/Jindom/dsh-bitwarden)（MIT，协议层与 mock 测试体系源自上游）。本 fork 的核心增量：**WebSocket 实时同步 + 写回 + 条目浏览面板 + 更完整的 Bitwarden 客户端约定遵从**。
+> **独立实现**：直接对接 Bitwarden/Vaultwarden 服务端 REST 与 SignalR 协议，不依赖 `bw` CLI，除可选的 `hash-wasm`（Argon2id KDF）外只用 Node 内置模块。
+> 设计过程中参考了两个 MIT 项目，详见文末[「参考与致谢」](#参考与致谢)。
 
 ## 装了什么
 
@@ -107,16 +108,32 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 五套离线测试
-node test/mock-e2e.test.mjs    # 协议/加密/检索/TOTP/刷新/API key（23 项）
-node test/live-sync.test.mjs   # WebSocket 握手/推送同步/防抖/LogOut/降级轮询（16 项）
-node test/mutations.test.mjs   # 写回 增改删恢复 + per-item key 往返（22 项）
-node test/host-entry.test.mjs  # Host 入口 + Remote 网关线面（16 项）
-node test/client-card.test.mjs # 条目面板（24 项，react-test-renderer + RPC 桩）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 181 项）
 ```
 
-mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub），并可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
+| 套件 | 覆盖 |
+| --- | --- |
+| `test/mock-e2e.test.mjs`（38） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
+| `test/live-sync.test.mjs`（16） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 |
+| `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
+| `test/host-entry.test.mjs`（20） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
+| `test/gateway-flow.test.mjs`（20） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 落盘与会话顺序 |
+| `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
+| `test/client-card.test.mjs`（49） | 条目面板（react-test-renderer + RPC 桩） |
+
+mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
+
+## 参考与致谢
+
+本项目为独立实现，设计与实现过程中参考了以下两个 MIT 项目：
+
+| 项目 | 本项目参考之处 |
+| --- | --- |
+| [Jindom/dsh-bitwarden](https://github.com/Jindom/dsh-bitwarden) | DSH 凭据插件的最小骨架、系统提示词注入思路、mock 服务端测试方法论 |
+| [Ox0400/dsh-vault](https://github.com/Ox0400/dsh-vault) | `--dsw-alias-*` 主题 token 用法、设置页面板的视觉与交互基线 |
+
+在此致谢。两者的 MIT 许可与版权声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 许可
 
-MIT（保留上游 Jindom/dsh-bitwarden 署名）。
+MIT，详见 [LICENSE](LICENSE)。
