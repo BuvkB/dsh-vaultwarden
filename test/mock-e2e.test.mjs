@@ -179,6 +179,18 @@ async function main() {
   check('2FA challenge lists the available providers', JSON.stringify(challenge?.providers) === JSON.stringify([0]))
   check('pending state is remembered for the retry', twoFactorClient.twoFactorPending?.provider === 0)
 
+  // A background retry (poll tick, tool call) must NOT rotate the challenge
+  // token: that would invalidate the code the user is typing.
+  const challengesBefore = twoFactorServer.stats.twoFactorChallenges
+  let backgroundRetry = null
+  try {
+    await twoFactorClient.unlock()
+  } catch (error) {
+    backgroundRetry = error
+  }
+  check('a background retry re-surfaces the same challenge', backgroundRetry?.code === 'two_factor_required' && backgroundRetry?.twoFactorToken === TWO_FACTOR_TOKEN, String(backgroundRetry?.code))
+  check('a background retry does not re-issue a challenge', twoFactorServer.stats.twoFactorChallenges === challengesBefore, `challenges ${challengesBefore}→${twoFactorServer.stats.twoFactorChallenges}`)
+
   let wrongCode = null
   try {
     await twoFactorClient.loginWithTwoFactor({ code: '000000' })
