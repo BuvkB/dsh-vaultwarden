@@ -95,6 +95,11 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== host entry smoke test ==="
   node test/host-entry.test.mjs
 
+  # Sign-in flow through the RPC gateway: wrong password, two-factor
+  # challenge, code retry, and the write/restart ordering rules.
+  echo "=== gateway sign-in flow test ==="
+  node test/gateway-flow.test.mjs
+
   # Cross-implementation check against the official Bitwarden CLI. It skips
   # itself (exit 0) when the CLI or openssl is unavailable.
   echo "=== official CLI interop test ==="
