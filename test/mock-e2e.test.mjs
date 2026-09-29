@@ -14,7 +14,7 @@
  * Run: node test/mock-e2e.test.mjs
  */
 import { VaultClient, VaultError } from '../lib/vault.js'
-import { EMAIL, PASSWORD, TWO_FACTOR_CODE, TWO_FACTOR_TOKEN, startMockServer } from './mock-server.mjs'
+import { EMAIL, PASSWORD, TWO_FACTOR_CODE, startMockServer } from './mock-server.mjs'
 
 let passed = 0
 let failed = 0
@@ -175,12 +175,15 @@ async function main() {
   } catch (error) {
     challenge = error
   }
-  check('2FA account surfaces two_factor_required with a token', challenge?.code === 'two_factor_required' && challenge?.twoFactorToken === TWO_FACTOR_TOKEN, String(challenge?.code))
+  // Per vaultwarden's contract the challenge carries the provider list only —
+  // there is no server-issued continuation token.
+  check('2FA account surfaces two_factor_required', challenge?.code === 'two_factor_required', String(challenge?.code))
   check('2FA challenge lists the available providers', JSON.stringify(challenge?.providers) === JSON.stringify([0]))
   check('pending state is remembered for the retry', twoFactorClient.twoFactorPending?.provider === 0)
 
-  // A background retry (poll tick, tool call) must NOT rotate the challenge
-  // token: that would invalidate the code the user is typing.
+  // A background retry (poll tick, tool call) must not fire another password
+  // grant while a challenge is outstanding: that would hammer the login
+  // endpoint and its rate limiter.
   const challengesBefore = twoFactorServer.stats.twoFactorChallenges
   let backgroundRetry = null
   try {
@@ -188,7 +191,7 @@ async function main() {
   } catch (error) {
     backgroundRetry = error
   }
-  check('a background retry re-surfaces the same challenge', backgroundRetry?.code === 'two_factor_required' && backgroundRetry?.twoFactorToken === TWO_FACTOR_TOKEN, String(backgroundRetry?.code))
+  check('a background retry re-surfaces the pending challenge', backgroundRetry?.code === 'two_factor_required', String(backgroundRetry?.code))
   check('a background retry does not re-issue a challenge', twoFactorServer.stats.twoFactorChallenges === challengesBefore, `challenges ${challengesBefore}→${twoFactorServer.stats.twoFactorChallenges}`)
 
   let wrongCode = null
@@ -213,8 +216,9 @@ async function main() {
     }
   })())
 
-  // A fresh client (simulating a host restart that cleared memory) must still
-  // finish the challenge when the browser supplies the continuation token.
+  // A fresh client (simulating a host restart that cleared memory) can still
+  // finish: submitting a code re-runs the whole grant, so no carried state is
+  // needed.
   const restartedClient = new VaultClient(settingsFor(twoFactorServer))
   let restartChallenge = null
   try {
@@ -222,10 +226,9 @@ async function main() {
   } catch (error) {
     restartChallenge = error
   }
-  const carriedToken = restartChallenge?.twoFactorToken
-  check('a restarted host re-issues a challenge token', carriedToken === TWO_FACTOR_TOKEN, String(carriedToken))
-  const restartedToken = await restartedClient.loginWithTwoFactor({ code: TWO_FACTOR_CODE, token: carriedToken })
-  check('an explicitly carried token completes the login after a restart', Boolean(restartedToken.accessToken) && twoFactorServer.stats.twoFactorAccepted === 2)
+  check('a restarted host re-issues a challenge', restartChallenge?.code === 'two_factor_required', String(restartChallenge?.code))
+  const restartedToken = await restartedClient.loginWithTwoFactor({ code: TWO_FACTOR_CODE })
+  check('a restart recovers with just a fresh code', Boolean(restartedToken.accessToken) && twoFactorServer.stats.twoFactorAccepted === 2)
 
   // The UI's escape hatch: reset() must clear a stale challenge so the next
   // attempt starts a clean login instead of re-surfacing the dead one.

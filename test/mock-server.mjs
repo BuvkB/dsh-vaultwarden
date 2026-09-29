@@ -447,22 +447,22 @@ export async function startMockServer(options = {}) {
           if (!form.get('client_id') || !form.get('deviceIdentifier')) {
             return send(400, { error: 'invalid_request', error_description: 'missing client_id/deviceIdentifier' })
           }
-          // Two-factor accounts: refuse the first password grant with the
-          // provider list plus the single-use token a code retry must echo.
+          // Two-factor accounts, mirroring vaultwarden's `twofactor_auth`:
+          // the refused grant answers with the provider list ONLY (no
+          // server-issued token); the retry re-sends the whole password grant
+          // with the user's code in `two_factor_token`.
           if (options.twoFactor) {
-            const token = form.get('twoFactorToken')
-            const code = form.get('twoFactor')
-            if (!token || !code) {
+            const code = form.get('twoFactorToken')
+            if (!code) {
               stats.twoFactorChallenges++
               return send(400, {
                 error: 'invalid_grant',
                 error_description: 'Two factor required.',
                 TwoFactorProviders: [0],
                 TwoFactorProviders2: { 0: null },
-                TwoFactorToken: TWO_FACTOR_TOKEN,
               })
             }
-            if (token !== TWO_FACTOR_TOKEN || code !== TWO_FACTOR_CODE) {
+            if (code !== TWO_FACTOR_CODE) {
               return send(400, { error: 'invalid_grant', error_description: 'Two factor code is invalid' })
             }
             stats.twoFactorAccepted++

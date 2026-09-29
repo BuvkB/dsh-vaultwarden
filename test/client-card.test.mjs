@@ -100,7 +100,10 @@ function makeRpc(overrides = {}) {
         return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
       }
       if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
-      if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0, token: 'mock-continuation-token' } }
+      if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
+      // Default: a session is already live, so the panel renders the vault.
+      // Tests that need the sign-in screen override this.
+      if (method === 'session') return { ok: true, value: { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true } }
       if (method === 'submitTwoFactor') return { ok: true, value: { ok: true, items: 3 } }
       return { ok: false, error: { code: 'not_found', message: `vw.${method} unknown` } }
     },
@@ -298,7 +301,8 @@ async function main() {
   })
   const twoFactorCall = twoFactorRpc.calls.find((call) => call.method === 'submitTwoFactor')
   check('two-factor code is submitted through vw/submitTwoFactor', Boolean(twoFactorCall) && twoFactorCall.args.code === '123456', JSON.stringify(twoFactorCall?.args))
-  check('the continuation token travels back with the code', twoFactorCall?.args.token === 'mock-continuation-token', JSON.stringify(twoFactorCall?.args))
+  // No continuation token exists in the protocol: the code alone finishes it.
+  check('the code is submitted without a continuation token', twoFactorCall?.args.token === undefined, JSON.stringify(twoFactorCall?.args))
   // A rejected code must keep the user on THIS screen so they can retry.
   const failingRpc = makeRpc({
     list: () => twoFactorError,
@@ -344,15 +348,15 @@ async function main() {
   // deactivate the half-finished sign-in so the next visit starts fresh.
   const leavingRpc = makeRpc({ list: () => twoFactorError, status: () => twoFactorError })
   const leaving = await mountPanel(mod, {}, leavingRpc)
-  const resetsBeforeUnmount = leavingRpc.calls.filter((call) => call.method === 'reset').length
+  const resetsBeforeUnmount = leavingRpc.calls.filter((call) => call.method === 'discardChallenge').length
   await act(async () => {
     leaving.renderer.unmount()
   })
   await act(async () => {
     await sleep(50)
   })
-  const resetsAfterUnmount = leavingRpc.calls.filter((call) => call.method === 'reset').length
-  check('unmounting the panel deactivates the pending session', resetsAfterUnmount > resetsBeforeUnmount, `${resetsBeforeUnmount}→${resetsAfterUnmount}`)
+  const resetsAfterUnmount = leavingRpc.calls.filter((call) => call.method === 'discardChallenge').length
+  check('unmounting the panel discards the pending challenge', resetsAfterUnmount > resetsBeforeUnmount, `${resetsBeforeUnmount}→${resetsAfterUnmount}`)
 
   // A hard failure keeps a way back too (wrong password, expired challenge…).
   const hardFailError = { ok: false, error: { code: 'bad_credentials', message: '登录失败：邮箱或主密码不正确' } }
@@ -362,6 +366,66 @@ async function main() {
   check('a failed login still offers a way back', hardFailText.includes('返回设置，重新填写'))
   await act(async () => {
     hardFail.renderer.unmount()
+  })
+
+  // ── sign-in flow: credentials first, code screen only after they verify ────
+  const signedOutConfig = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }
+  const signedOut = { ok: true, value: { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false } }
+  const twoFactorChallenge = { ok: true, value: { ok: true, authenticated: false, twoFactor: true, providers: [0], provider: 0, providerDescriptions: null } }
+
+  // Opening with credentials stored but no session must ask to sign in — NOT
+  // jump straight to the code screen (the reported bug).
+  const signInRpc = makeRpc({ config: () => signedOutConfig, session: () => signedOut })
+  const signedOutPanel = await mountPanel(mod, {}, signInRpc)
+  const signInText = JSON.stringify(signedOutPanel.renderer.toJSON())
+  check('a stored credential set lands on the sign-in form, not the code screen', signInText.includes('登录 Vaultwarden') && !signInText.includes('需要两步验证码'))
+  check('opening the panel does not auto-login', !signInRpc.calls.some((call) => call.method === 'list'))
+
+  // Submitting credentials that need 2FA advances to the code screen.
+  const connectRpc = makeRpc({
+    config: () => signedOutConfig,
+    session: () => signedOut,
+    connect: () => twoFactorChallenge,
+  })
+  const connecting = await mountPanel(mod, {}, connectRpc)
+  const pw = () => connecting.renderer.root.findAllByType('input').find((node) => node.props.type === 'password')
+  await act(async () => {
+    pw().props.onChange({ target: { value: 'master-pass-123' } })
+  })
+  await act(async () => {
+    connecting.renderer.root.findAllByType('button').find((node) => node.props.children === '验证并登录').props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const connectCall = connectRpc.calls.find((call) => call.method === 'connect')
+  check('submitting verifies the credentials through vw/connect', Boolean(connectCall) && connectCall.args.masterPassword === 'master-pass-123', JSON.stringify(connectCall?.args))
+  check('the code screen appears only after the credentials verify', JSON.stringify(connecting.renderer.toJSON()).includes('需要两步验证码'))
+  await act(async () => {
+    connecting.renderer.unmount()
+  })
+
+  // A rejected password must stay on the sign-in form and say so.
+  const badPasswordRpc = makeRpc({
+    config: () => signedOutConfig,
+    session: () => signedOut,
+    connect: () => ({ ok: false, error: { code: 'bad_credentials', message: '邮箱或主密码不正确' } }),
+  })
+  const badPassword = await mountPanel(mod, {}, badPasswordRpc)
+  await act(async () => {
+    badPassword.renderer.root.findAllByType('input').find((node) => node.props.type === 'password').props.onChange({ target: { value: 'wrong' } })
+  })
+  await act(async () => {
+    badPassword.renderer.root.findAllByType('button').find((node) => node.props.children === '验证并登录').props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const badText = JSON.stringify(badPassword.renderer.toJSON())
+  check('a wrong password is reported on the sign-in form', badText.includes('邮箱或主密码不正确') && badText.includes('登录 Vaultwarden'))
+  check('a wrong password never reaches the code screen', !badText.includes('需要两步验证码'))
+  await act(async () => {
+    badPassword.renderer.unmount()
   })
 
   // ── no matches ────────────────────────────────────────────────────────────
