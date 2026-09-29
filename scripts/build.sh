@@ -92,6 +92,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== cipher write-back test ==="
   node test/mutations.test.mjs
 
+  # Host-entry smoke test: imports lib/index.js and runs apply() against a fake
+  # host context, so a broken Config schema or registration path fails here
+  # instead of at startup.
+  echo "=== host entry smoke test ==="
+  node test/host-entry.test.mjs
+
   # Cross-implementation check against the official Bitwarden CLI. It skips
   # itself (exit 0) when the CLI or openssl is unavailable.
   echo "=== official CLI interop test ==="
