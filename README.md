@@ -142,7 +142,11 @@ Vaultwarden 的两步验证是**两步**：先验证主密码，再提交动态�
 
 Vaultwarden 的通行密钥是一种 **2FA 方式**，但它必须由**浏览器调用 `navigator.credentials` 并配合认证器上的用户手势**（指纹/面容/PIN）才能完成——这是 WebAuthn 防自动化的核心设计。插件运行在无头 Node 进程中，**没有浏览器和认证器，物理上无法完成这个仪式**，因此不支持，未来也不会支持。
 
-**替代方案**：改用 **API 密钥**登录（`apiKeyClientId` = `user.<uuid>` + `apiKeyClientSecret`）。Vaultwarden 的 API 密钥**直接绕过 2FA**，配合上面的会话持久化，基本可以做到永久免密。
+**替代方案**：改用 **API 密钥**登录（`apiKeyClientId` = `user.<uuid>` + `apiKeyClientSecret`）。Vaultwarden 的 API 密钥**直接绕过 2FA**（服务端 `user_api_key_login` 不调用 `twofactor_auth`），配合上面的会话持久化，基本可以做到永久免密。
+
+在面板的登录表单里把「登录方式」切到 **API 密钥**即可填写这两个字段（宿主的插件配置页同样可以填）。密钥在 Vaultwarden 网页端 **设置 → 安全 → 密钥** 获取。
+
+> 注意：API 密钥只解决**登录**，不解决**解密**——保险库是用主密码派生的密钥加密的，所以 `masterPassword` 仍然必填。API 密钥省掉的是验证码，不是主密码。
 
 ## 参考与致谢
 

@@ -278,10 +278,13 @@ async function main() {
   await act(async () => {
     setupInputs()[1].props.onChange({ target: { value: 'me@example.com' } })
   })
-  check('setup save enables once server + email are filled', setupSave().props.disabled === false)
+  // Nothing is stored yet, so the master password is still required: the vault
+  // cannot be decrypted without it.
+  check('setup save waits for the first master password', setupSave().props.disabled === true)
   await act(async () => {
     setupInputs()[2].props.onChange({ target: { value: 'master-pass-123' } })
   })
+  check('setup save enables once server + email + password are filled', setupSave().props.disabled === false)
   await act(async () => {
     setupSave().props.onClick()
   })
@@ -293,6 +296,50 @@ async function main() {
   await act(async () => {
     unconfigured.renderer.unmount()
   })
+
+  // ── API key method in the UI ──────────────────────────────────────────────
+  // The API key lives on the same form as the password, behind a method select:
+  // it must be reachable from the panel, not only from the host's plugin config.
+  {
+    const apiConfig = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, apiKeyClientId: '' } }
+    const signedOut = { ok: true, value: { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false } }
+    const rpc = makeRpc({ config: () => apiConfig, session: () => signedOut })
+    const panel = await mountPanel(mod, {}, rpc)
+    const text = () => JSON.stringify(panel.renderer.toJSON())
+    check('the sign-in form offers a method selector', text().includes('登录方式') && text().includes('API 密钥'))
+    const selects = () => panel.renderer.root.findAllByType('select')
+    check('the method selector lists both sign-in methods', selects().length >= 1 && String(selects()[0].props.children?.length ?? 0) >= 2, `selects=${selects().length}`)
+
+    // Switching to API key reveals its two fields.
+    await act(async () => {
+      selects()[0].props.onChange({ target: { value: 'apikey' } })
+    })
+    const inputs = () => panel.renderer.root.findAllByType('input')
+    const ids = inputs().map((node) => String(node.props.value ?? ''))
+    check('choosing API key reveals its two fields', text().includes('client_id') && text().includes('client_secret'), ids.join('|'))
+    check('the API key secret is a password field', inputs().some((node) => node.props.type === 'password' && /secret|密钥/i.test(String(node.props.placeholder ?? ''))))
+
+    // Submitting sends the key through vw/connect.
+    const idInput = inputs().find((node) => /user\./.test(String(node.props.placeholder ?? '')))
+    const secretInput = inputs().find((node) => node.props.type === 'password' && /secret|密钥/i.test(String(node.props.placeholder ?? '')))
+    await act(async () => {
+      idInput.props.onChange({ target: { value: 'user.11111111-1111-1111-1111-111111111111' } })
+    })
+    await act(async () => {
+      secretInput.props.onChange({ target: { value: 'secret-value' } })
+    })
+    await act(async () => {
+      panel.renderer.root.findAllByType('button').find((node) => node.props.children === '验证并登录').props.onClick()
+    })
+    await act(async () => {
+      await sleep(50)
+    })
+    const connectCall = rpc.calls.find((call) => call.method === 'connect')
+    check('the API key is submitted through vw/connect', connectCall?.args.apiKeyClientId === 'user.11111111-1111-1111-1111-111111111111' && connectCall?.args.apiKeyClientSecret === 'secret-value', JSON.stringify({ ...connectCall?.args, apiKeyClientSecret: connectCall?.args?.apiKeyClientSecret ? '<set>' : undefined }))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
 
   // ── two-factor challenge ──────────────────────────────────────────────────
   const twoFactorError = { ok: false, error: { code: 'two_factor_required', message: '该账户启用了两步验证，需要验证码' } }
