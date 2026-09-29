@@ -22,7 +22,9 @@
     "scripts",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22"
