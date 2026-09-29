@@ -4,6 +4,37 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-09-29
+
+Panel copy and phone layout. No breaking changes.
+
+### Changed
+
+- **The title is just "Bitwarden 凭据库".** The old
+  "Bitwarden / Vaultwarden 凭据库" spent the whole heading on two product
+  names. Vaultwarden support now rides alongside in small type
+  (`（支持 Bitwarden / Vaultwarden）`), which says the same thing without
+  shouting it. The English dictionary matches.
+- **The search box only says what it searches.** The placeholder also carried
+  the keyboard shortcuts, and on a phone that text was truncated before it
+  finished. It is now `搜索名称、用户名或网址`, with `/`, Esc and ↑↓ moved to
+  the input tooltip, where they stay reachable without competing for space.
+
+### Fixed
+
+- **Phone layout.** Below 560px the search box takes its own row, field rows
+  stack their label above the value so long URLs and notes keep the full
+  width, and the detail card tightens its padding. Driven by a scoped media
+  query over markers on the elements that need re-flowing.
+- **Every list tile showed the same glyph.** Entries named after a host
+  (`10.0.0.10`, `…:9443`) showed `1` in every row. The monogram now takes
+  the first letter found across name, username and URI host, so those rows
+  read as distinct entries at a glance.
+
+### Tests
+
+- 221 offline tests across seven suites (`bash scripts/build.sh`).
+
 ## [0.2.2] — 2026-09-29
 
 A fresh install could not be set up from the panel. No breaking changes.
