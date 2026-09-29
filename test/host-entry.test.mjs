@@ -6,6 +6,7 @@
  *
  * Run: node test/host-entry.test.mjs
  */
+import { readFileSync } from 'node:fs'
 import { name, inject, Config, apply, default as defaultExport } from '../lib/index.js'
 
 let passed = 0
@@ -137,6 +138,16 @@ async function main() {
     return offenders.length === 0
   })(), markers.join(','))
   check('gateway binds the vw namespace', Object.create(VaultGateway.prototype) instanceof Object && VaultGateway.name === 'VaultGateway')
+  check('gateway keeps no private members (RPC receiver is a proxy)', (() => {
+    // The gateway invokes methods with the Cordis proxy as receiver; a `#private`
+    // member would throw "Receiver must be an instance of class VaultGateway".
+    // Only real code lines count — comments legitimately mention the hazard.
+    const code = readFileSync(new URL('../lib/gateway.js', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n')
+    return !/#[A-Za-z_]/.test(code)
+  })())
 
   // ── degraded configuration must not throw ───────────────────────────────────
   const emptyCtx = { ...fakeCtx, tools: { register: () => () => {} }, systemPrompt: { section: () => () => {} } }
