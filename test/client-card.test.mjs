@@ -242,17 +242,26 @@ async function main() {
   })
 
   // ── not configured → guided setup form ────────────────────────────────────
+  // The panel chooses the setup form from the configuration state (not from an
+  // error code, which does not survive the RPC boundary).
+  const unconfiguredConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
   const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
-  const setupRpc = makeRpc({ list: () => notConfiguredError, status: () => notConfiguredError })
+  const setupRpc = makeRpc({ config: () => unconfiguredConfig, list: () => notConfiguredError, status: () => notConfiguredError })
   const unconfigured = await mountPanel(mod, {}, setupRpc)
   const setupText = JSON.stringify(unconfigured.renderer.toJSON())
   check('unconfigured state offers the guided setup form', setupText.includes('连接 Vaultwarden') && setupText.includes('服务器地址'))
   const setupInputs = () => unconfigured.renderer.root.findAllByType('input')
   check('setup form renders three inputs (server/email/master)', setupInputs().length === 3, `inputs=${setupInputs().length}`)
-  check('setup form prefills the known server url', setupInputs()[0].props.value === 'https://vault.example.com')
+  await act(async () => {
+    setupInputs()[0].props.onChange({ target: { value: 'https://vault.example.com' } })
+  })
+  check('setup server field accepts the address', setupInputs()[0].props.value === 'https://vault.example.com')
   check('setup master password starts empty and is a password field', setupInputs()[2].props.type === 'password' && setupInputs()[2].props.value === '')
   const setupSave = () => unconfigured.renderer.root.findAllByType('button').find((node) => node.props.children === '保存并连接')
-  check('setup save is disabled until server + email are filled', setupSave().props.disabled === false, 'prefilled from config')
+  await act(async () => {
+    setupInputs()[1].props.onChange({ target: { value: 'me@example.com' } })
+  })
+  check('setup save enables once server + email are filled', setupSave().props.disabled === false)
   await act(async () => {
     setupInputs()[2].props.onChange({ target: { value: 'master-pass-123' } })
   })
