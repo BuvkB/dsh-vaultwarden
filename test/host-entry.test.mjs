@@ -34,7 +34,7 @@ async function main() {
   // ── run apply against a fake host context ──────────────────────────────────
   const tools = []
   const sections = []
-  const settingsScopes = []
+  const settingsWrites = []
   const plugins = []
   const injected = []
   const effects = []
@@ -71,14 +71,13 @@ async function main() {
           effects.push(label)
           return fn()
         },
+        // 0.2.0 settings service surface: no register/scope — the loader owns
+        // entry config and restarts the plugin when a form writes it.
         settings: {
-          register: (ns, schema, options) => {
-            settingsScopes.push({ ns, schema, options })
-            return {
-              get: () => ({}),
-              watch: () => () => {},
-            }
+          update: async (ns, patch) => {
+            settingsWrites.push({ ns, patch })
           },
+          describe: () => [],
         },
         slots: {
           inject: () => {},
@@ -94,16 +93,32 @@ async function main() {
     },
   }
 
-  apply(fakeCtx, { serverUrl: '', email: '', masterPassword: '' })
+  // Volatile fields reach the plugin as reference objects (cosmokit protocol),
+  // not bare values — `String(ref)` would be "[object Object]".
+  const write = Symbol.for('cosmokit.volatile.write')
+  const ref = (value) => Object.freeze({ get: () => value, [write]: () => {} })
+  apply(fakeCtx, {
+    serverUrl: ref('https://vault.example.com'),
+    email: ref('me@example.com'),
+    masterPassword: ref('secret'),
+    websocket: ref(true),
+    pollIntervalSeconds: ref(60),
+    cacheMinutes: ref(30),
+    deviceIdentifier: ref(''),
+    accessMode: ref('readonly'),
+  })
 
   const toolNames = tools.map((tool) => tool.name)
   check('registers the 7 credential tools', ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync', 'bitwarden_create', 'bitwarden_update', 'bitwarden_delete'].every((n) => toolNames.includes(n)), toolNames.join(','))
   check('find tool describes the no-password rule', /不含密码/.test(tools.find((t) => t.name === 'bitwarden_find').description))
   check('create tool requires a name', (tools.find((t) => t.name === 'bitwarden_create').parameters.required ?? []).includes('name'))
   check('injects the optional settings service it needs', injected.includes('settings'), injected.join(','))
-  check('registers the settings namespace under the loader entry id', settingsScopes[0]?.ns === 'dsh-vaultwarden', String(settingsScopes[0]?.ns))
+  check('unwraps volatile config references (no "[object Object]")', (() => {
+    const report = plugins[0]?.config?.owner?.getSettings?.()
+    return report?.serverUrl === 'https://vault.example.com' && report?.email === 'me@example.com' && report?.accessMode === 'readonly'
+  })(), JSON.stringify(plugins[0]?.config?.owner?.getSettings?.()))
   check('every Config field is volatile (host form renders them)', (() => {
-    const schema = settingsScopes[0]?.schema
+    const schema = Config
     const fields = schema?.dict ?? {}
     return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
   })())
