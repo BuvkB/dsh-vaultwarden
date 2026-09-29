@@ -4,6 +4,42 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-29
+
+Panel responsiveness and release polish. No breaking changes.
+
+### Fixed
+
+- **Reopening the panel no longer re-loads everything.** Each open re-ran
+  `config` → `session` → `list` → `status`, and `status()` performs a
+  `/api/config` network round trip (measured **380–830 ms** against a real
+  Vaultwarden) whose only useful output is the server version string. Three
+  layers of caching now sit in front of that:
+  - the reachability probe is reused for 5 minutes (a forced refresh still
+    always re-probes),
+  - `findEntries` is memoised per `(query, limit)` and dropped whenever the
+    vault is replaced,
+  - a module-level cache survives the panel unmounting, so a reopen paints the
+    previous list immediately and refreshes quietly behind it. A failed
+    background refresh never replaces a view the user is already reading, and
+    the cache is keyed by `serverUrl` + `email` so switching accounts cannot
+    show one vault's entries for another.
+- **A reload loop that wiped user input.** `readVault` had been given
+  `state.status` as a dependency, so every status change rebuilt `load()`,
+  which re-ran the mount effect — an endless reload. The status is now read
+  through a ref, which gives the same answer without the churn.
+
+### Added
+
+- Panel screenshots (`assets/`) plus `screenshots.json`, so storefronts show
+  the list and detail views in both themes. The published images are
+  anonymised: real usernames, emails and addresses were replaced with demo
+  values, while layout and colour are the genuine render.
+
+### Tests
+
+- 207 offline tests across seven suites (`bash scripts/build.sh`).
+
 ## [0.2.0] — 2026-09-29
 
 First public release as an **independent project** (not a fork). It talks to the

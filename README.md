@@ -117,7 +117,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 186 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 207 项）
 ```
 
 | 套件 | 覆盖 |
@@ -126,9 +126,9 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测�
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
 | `test/host-entry.test.mjs`（21） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
-| `test/gateway-flow.test.mjs`（20） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 落盘与会话顺序 |
+| `test/gateway-flow.test.mjs`（30） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（52） | 条目面板 + 徽标手动同步（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（63） | 条目面板 + 徽标手动同步 + 重开缓存（react-test-renderer + RPC 桩） |
 
 mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
 
