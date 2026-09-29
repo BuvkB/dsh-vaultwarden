@@ -2,3 +2,6 @@ node_modules/
 *.tgz
 npm-debug.log*
 .DS_Store
+
+# Local materials for the awesome-dsh-plugin submission (not part of the package)
+.pr/
