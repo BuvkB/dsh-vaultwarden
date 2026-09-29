@@ -126,6 +126,22 @@ async function main() {
   check('registers effects with labels (cleanup contract)', effects.length >= 8 && effects.every((label) => typeof label === 'string' && label.startsWith('dsh-vaultwarden:')), `${effects.length} effects`)
   check('mounts the Remote gateway instead of an HTTP route', plugins.length === 1 && plugins[0].plugin?.name === 'VaultGateway' && typeof plugins[0].config?.getClient === 'function', JSON.stringify(plugins.map((entry) => entry.plugin?.name)))
 
+  // ── live sync must actually start ──────────────────────────────────────────
+  // Regression: the live-sync effect runs during activation, before any client
+  // exists, so starting the channel there is a no-op. The first getClient()
+  // must build it, or `status.liveSync.mode` stays `off` forever.
+  check('the first getClient() starts live sync', (() => {
+    const getClient = plugins[0].config.getClient
+    const first = getClient()
+    return Boolean(first?.live) && typeof first.live.report === 'function' && first.live.report().mode !== 'off'
+  })(), (() => {
+    try {
+      return JSON.stringify(plugins[0].config.getClient()?.live?.report?.() ?? null)
+    } catch (error) {
+      return String(error.message)
+    }
+  })())
+
   // ── the gateway's wire surface ──────────────────────────────────────────────
   const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
   const { VaultGateway } = await import('../lib/gateway.js')
