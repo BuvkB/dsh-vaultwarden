@@ -67,6 +67,69 @@ function makeGateway(serverUrl, stored) {
 
 async function main() {
   console.log('gateway sign-in flow (vw/connect → vw/submitTwoFactor)')
+
+  // ── fresh install: the panel's FIRST RPC must not reject ──────────────────
+  // Reported bug: on a new install the settings panel showed only
+  // "尚未配置完成" + 重试 and the guided setup form could never be reached.
+  // The panel opens with `config()`, and that call used to reject: it reports
+  // the session store through `VaultClient.sessionPersistence`, whose getter
+  // normalised `serverUrl` — empty on a fresh install — and threw
+  // `not_configured`, taking the whole config payload down with it.
+  //
+  // The wiring below mirrors lib/index.js exactly (the client owns a real
+  // SessionStore); drop the store and the getter returns early, which is why
+  // this slipped through the existing gateway test.
+  {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { SessionStore } = await import('../lib/session-store.js')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vw-unconfigured-'))
+    const store = new SessionStore(path.join(dir, 'session.json'), { maxAgeDays: 30 })
+    const empty = {
+      serverUrl: '',
+      email: '',
+      masterPassword: '',
+      apiKeyClientId: '',
+      apiKeyClientSecret: '',
+      cacheMinutes: 30,
+      websocket: true,
+      pollIntervalSeconds: 300,
+      deviceIdentifier: '',
+      accessMode: 'readonly',
+      sessionDays: 30,
+    }
+    const client = new VaultClient(empty, { sessionStore: store })
+    const gateway = Object.create(VaultGateway.prototype)
+    gateway.getClient = () => client
+    gateway.createClient = () => client
+    gateway.owner = { getSettings: () => empty, update: async () => {} }
+    gateway.mutations = null
+
+    let config = null
+    let threw = null
+    try {
+      config = await gateway.config()
+    } catch (error) {
+      threw = error
+    }
+    check("a fresh install can read its config (the panel's first RPC)", threw === null, String(threw?.message))
+    check('the config reports the empty state rather than failing', config?.serverUrl === '' && config?.email === '', JSON.stringify(config))
+    check('the config still describes the session store', config?.session?.enabled === true, JSON.stringify(config?.session))
+    check('an unconfigured install reports no stored session', config?.session?.stored === false, JSON.stringify(config?.session))
+
+    // The same trap must not reappear through the other read-only RPCs.
+    let sessionThrew = null
+    try {
+      await gateway.session()
+    } catch (error) {
+      sessionThrew = error
+    }
+    check('session() stays usable while unconfigured', sessionThrew === null, String(sessionThrew?.message))
+
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+
   const server = await startMockServer({ twoFactor: true })
   const base = { serverUrl: server.url, email: EMAIL }
 

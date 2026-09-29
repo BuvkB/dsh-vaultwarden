@@ -4,6 +4,36 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-09-29
+
+A fresh install could not be set up from the panel. No breaking changes.
+
+### Fixed
+
+- **A new install was stuck on "尚未配置完成" and could never reach the
+  guided setup form.** The panel opens with `vw/config`, and that call
+  rejected on an unconfigured install: the payload reports the session store
+  through `VaultClient.sessionPersistence`, whose getter keyed the stored
+  session by `serverUrl` — empty before setup — and `normalizeServerUrl("")`
+  raises `not_configured`. The exception took the whole config payload down,
+  so the panel rendered an error wall whose only control was a 重试 button
+  that re-ran the same failing request. The getter now reports "nothing
+  stored" instead of throwing when no server is configured. This is the path
+  a first install takes, so it affected every new user.
+- **A failed `vw/config` no longer hides the setup form.** The form is the
+  only way out of an unconfigured state, so it is now rendered from the
+  configuration state alone: whatever makes the read fail, the fields come up
+  empty with the reason shown above them, instead of a dead end.
+
+### Tests
+
+- Two regression suites for the report above: the gateway now asserts that a
+  fresh install can read its config (the wiring mirrors `lib/index.js`, with a
+  real `SessionStore` — without a store the getter returned early, which is
+  why the existing tests passed), and the panel asserts that a failing config
+  RPC still offers the setup form.
+- 214 offline tests across seven suites (`bash scripts/build.sh`).
+
 ## [0.2.1] — 2026-09-29
 
 Panel responsiveness and release polish. No breaking changes.
