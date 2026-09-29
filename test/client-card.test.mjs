@@ -299,7 +299,33 @@ async function main() {
   const twoFactorCall = twoFactorRpc.calls.find((call) => call.method === 'submitTwoFactor')
   check('two-factor code is submitted through vw/submitTwoFactor', Boolean(twoFactorCall) && twoFactorCall.args.code === '123456', JSON.stringify(twoFactorCall?.args))
   check('the continuation token travels back with the code', twoFactorCall?.args.token === 'mock-continuation-token', JSON.stringify(twoFactorCall?.args))
-  // Escape hatch: an expired challenge must not be a dead end.
+  // A rejected code must keep the user on THIS screen so they can retry.
+  const failingRpc = makeRpc({
+    list: () => twoFactorError,
+    status: () => twoFactorError,
+    submitTwoFactor: () => ({ ok: false, error: { code: 'bad_request', message: '两步验证码不正确' } }),
+  })
+  const retryable = await mountPanel(mod, {}, failingRpc)
+  const retryInput = () => retryable.renderer.root.findAllByType('input').find((node) => node.props.autoComplete === 'one-time-code')
+  const retrySubmit = () => retryable.renderer.root.findAllByType('button').find((node) => node.props.children === '提交验证码')
+  await act(async () => {
+    retryInput().props.onChange({ target: { value: '000000' } })
+  })
+  await act(async () => {
+    retrySubmit().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const retryText = JSON.stringify(retryable.renderer.toJSON())
+  check('a rejected code reports the error inline', retryText.includes('两步验证码不正确'))
+  check('a rejected code stays on the two-factor screen', retryText.includes('需要两步验证码') && !retryText.includes('连接 Vaultwarden'))
+  check('a rejected code does not clear the session', !failingRpc.calls.some((call) => call.method === 'reset'))
+  await act(async () => {
+    retryable.renderer.unmount()
+  })
+
+  // The deliberate way back still works: it clears the session and opens the form.
   const restartButton = () => challenged.renderer.root.findAllByType('button').find((node) => node.props.children === '返回设置，重新填写')
   check('two-factor form offers a restart escape hatch', Boolean(restartButton()))
   await act(async () => {
@@ -313,6 +339,20 @@ async function main() {
   await act(async () => {
     challenged.renderer.unmount()
   })
+
+  // Leaving the view (switching settings pages / closing the dialog) must
+  // deactivate the half-finished sign-in so the next visit starts fresh.
+  const leavingRpc = makeRpc({ list: () => twoFactorError, status: () => twoFactorError })
+  const leaving = await mountPanel(mod, {}, leavingRpc)
+  const resetsBeforeUnmount = leavingRpc.calls.filter((call) => call.method === 'reset').length
+  await act(async () => {
+    leaving.renderer.unmount()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const resetsAfterUnmount = leavingRpc.calls.filter((call) => call.method === 'reset').length
+  check('unmounting the panel deactivates the pending session', resetsAfterUnmount > resetsBeforeUnmount, `${resetsBeforeUnmount}→${resetsAfterUnmount}`)
 
   // A hard failure keeps a way back too (wrong password, expired challenge…).
   const hardFailError = { ok: false, error: { code: 'bad_credentials', message: '登录失败：邮箱或主密码不正确' } }
