@@ -97,6 +97,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 | 现象 | 处理 |
 | --- | --- |
 | `凭据库尚未配置完整` | 在设置卡片补 `serverUrl` + `email` + `masterPassword`（或 API 密钥） |
+| 面板停在「尚未配置完成」、只有「重试」按钮 | 0.2.1 及更早的全新安装会如此（`vw/config` 被 `sessionPersistence` 拖垮）。升级到 0.2.2，或先在 设置 → 插件 → dsh-vaultwarden 的配置卡片里手填三项，面板随即恢复 |
 | `登录失败：Username or password is incorrect` | 核对 `email`（必须与登录账号一致）与主密码 |
 | `该账户启用了两步验证` | 改用 API 密钥登录（client_id/client_secret） |
 | `该账户使用 Argon2id KDF` | 插件目录执行 `npm install hash-wasm`；或网页端把 KDF 改为 PBKDF2-SHA256 |
@@ -108,7 +109,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.0   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.2   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -117,7 +118,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 207 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 214 项）
 ```
 
 | 套件 | 覆盖 |

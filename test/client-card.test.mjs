@@ -442,6 +442,23 @@ async function main() {
     hardFail.renderer.unmount()
   })
 
+  // ── a failing config RPC must not dead-end the panel ─────────────────────
+  // The reported bug rendered "尚未配置完成" + 重试 when `config` rejected, and
+  // 重试 re-ran the same failing call forever — the guided setup form, which is
+  // the only way out, sat unreachable behind it. Whatever makes `config` fail,
+  // the form has to stay on screen.
+  {
+    const failingConfig = { ok: false, error: { code: 'not_configured', message: '未配置 Vaultwarden 服务器地址' } }
+    const rpc = makeRpc({ config: () => failingConfig, list: () => failingConfig, status: () => failingConfig })
+    const panel = await mountPanel(mod, {}, rpc)
+    const failureText = JSON.stringify(panel.renderer.toJSON())
+    check('a failing config RPC still offers the guided setup form', failureText.includes('连接 Vaultwarden') && failureText.includes('服务器地址'))
+    check('a failing config RPC does not render the dead end', !failureText.includes('尚未配置完成'))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
   // ── reopen performance: a second open must not re-fetch everything ────────
   // The host unmounts the panel when the dialog closes, so reopening used to
   // re-run config + session + list + a status probe. A recent read is now
