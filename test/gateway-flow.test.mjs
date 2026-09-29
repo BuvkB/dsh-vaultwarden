@@ -106,6 +106,21 @@ async function main() {
     check('the right code completes the sign-in', submitted?.ok === true && submitted.items === 4, JSON.stringify(submitted))
   }
 
+  // ── the challenge is adopted by the live client ───────────────────────────
+  {
+    const { gateway, current } = makeGateway(server.url, {})
+    await gateway.connect(server.url, EMAIL, PASSWORD)
+    const live = current()
+    check('the live client knows a challenge is pending', Boolean(live.twoFactorPending), JSON.stringify(live.twoFactorPending))
+    let guarded = null
+    try {
+      await live.unlock()
+    } catch (error) {
+      guarded = error
+    }
+    check('background work cannot start a fresh login mid-challenge', guarded?.code === 'two_factor_required', String(guarded?.code))
+  }
+
   // ── already signed in: session() reports it and connect() writes nothing ───
   {
     const { gateway, writes } = makeGateway(server.url, { serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD })
