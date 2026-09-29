@@ -5,6 +5,14 @@
 > **独立实现**：直接对接 Bitwarden/Vaultwarden 服务端 REST 与 SignalR 协议，不依赖 `bw` CLI，除可选的 `hash-wasm`（Argon2id KDF）外只用 Node 内置模块。
 > 设计过程中参考了两个 MIT 项目，详见文末[「参考与致谢」](#参考与致谢)。
 
+## 界面预览
+
+| 条目列表 | 条目详情（浅色） | 条目详情（暗色） |
+| --- | --- | --- |
+| ![列表](assets/panel-list.png) | ![详情](assets/panel-detail.png) | ![暗色详情](assets/panel-detail-dark.png) |
+
+> 截图中的条目为演示数据；界面颜色全部取自宿主的 `--dsw-alias-*` 主题 token，因此浅色/暗色下都跟随主题。
+
 ## 装了什么
 
 | 能力 | 说明 |

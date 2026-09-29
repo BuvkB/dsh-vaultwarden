@@ -19,12 +19,14 @@
   },
   "files": [
     "lib",
+    "assets",
     "scripts",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "screenshots.json"
   ],
   "engines": {
     "node": ">=22"
