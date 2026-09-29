@@ -38,6 +38,7 @@
 | `cacheMinutes` | 解锁后的内存缓存时长（默认 30 分钟） |
 | `deviceIdentifier` | 可选设备标识。官方桌面/浏览器客户端会持久化稳定值；**留空按「服务器+邮箱」确定性派生，不写盘** |
 | `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（每次写回需用户确认）/ `auto`（直接写回）。仅个人条目，组织条目明确报错 |
+| `sessionDays` | 登录会话保留天数（默认 30，0=每次重登）。**按闲置计时**：期间只要用过一次就自动续期，闲置超期才失效 |
 
 ### 2. 环境变量
 
@@ -122,6 +123,26 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测�
 | `test/client-card.test.mjs`（52） | 条目面板 + 徽标手动同步（react-test-renderer + RPC 桩） |
 
 mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
+
+## 登录与会话
+
+### 为什么要输两次（密码 + 验证码）
+
+Vaultwarden 的两步验证是**两步**：先验证主密码，再提交动态码。插件严格按这个顺序来——密码错误会停在表单并报错，**只有密码验证通过后**才进入验证码界面。
+
+### 免密登录（推荐）
+
+`sessionDays` 默认 **30 天**，且**按闲置计时**：登录一次后，令牌（含 refresh token 与派生主密钥）会加密保存在 `~/.dsh/data/dsh-vaultwarden/session.json`（权限 `0600`，仅本人可读）。期间只要用过一次密码库，有效期就自动往后滑；**闲置超过 30 天才失效**。所以正常情况下，插件重启、DSH 重启都不需要你再输密码——除非真的 30 天没用过。
+
+设为 `0` 可关闭持久化，每次都重新登录。
+
+> ⚠️ 该文件等同于主密码的保护级别：能读到它就能解密保险库。这与插件已把 `masterPassword` 存在 profile 配置里（为了能无人值守解锁）是同一权衡，官方客户端的「记住我 / PIN 解锁」也是同样取舍。
+
+### 通行密钥（passkey / WebAuthn）不支持
+
+Vaultwarden 的通行密钥是一种 **2FA 方式**，但它必须由**浏览器调用 `navigator.credentials` 并配合认证器上的用户手势**（指纹/面容/PIN）才能完成——这是 WebAuthn 防自动化的核心设计。插件运行在无头 Node 进程中，**没有浏览器和认证器，物理上无法完成这个仪式**，因此不支持，未来也不会支持。
+
+**替代方案**：改用 **API 密钥**登录（`apiKeyClientId` = `user.<uuid>` + `apiKeyClientSecret`）。Vaultwarden 的 API 密钥**直接绕过 2FA**，配合上面的会话持久化，基本可以做到永久免密。
 
 ## 参考与致谢
 

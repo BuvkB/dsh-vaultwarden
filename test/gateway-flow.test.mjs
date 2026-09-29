@@ -55,6 +55,9 @@ function makeGateway(serverUrl, stored) {
   // the host's `ctx.plugin(VaultGateway, ...)` ends up calling into.
   const gateway = Object.create(VaultGateway.prototype)
   gateway.getClient = () => client
+  // Mirrors lib/index.js: the probe client shares the store and may be built
+  // from candidate settings that have not been written yet.
+  gateway.createClient = (override) => new VaultClient(override ? { serverUrl, ...settings, ...override } : { serverUrl, ...settings })
   gateway.owner = owner
   gateway.mutations = null
   gateway.pendingProbe = null
@@ -156,6 +159,58 @@ async function main() {
     await gateway.discardChallenge()
     const stillLive = await gateway.session()
     check('discarding a challenge keeps the live session', stillLive?.authenticated === true, JSON.stringify(stillLive))
+  }
+
+  // ── session persistence: surviving a restart ──────────────────────────────
+  // The reported pain: every plugin restart forced a fresh master password,
+  // and with two-factor enabled a fresh code as well. A persisted session must
+  // let a brand-new client reopen the vault with no prompts.
+  {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { SessionStore } = await import('../lib/session-store.js')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vw-session-'))
+    const store = new SessionStore(path.join(dir, 'session.json'), { maxAgeDays: 30 })
+
+    // First run: sign in with the code, which persists the session.
+    const first = new VaultClient({ serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD }, { sessionStore: store })
+    try {
+      await first.unlock()
+    } catch {
+      /* expected two-factor challenge */
+    }
+    await first.loginWithTwoFactor({ code: TWO_FACTOR_CODE, provider: 0, remember: true })
+    const firstVault = await first.unlock()
+    check('the first run unlocks the vault', firstVault.items.length === 4, String(firstVault.items.length))
+    check('the session is written to disk', fs.existsSync(store.path))
+    check('the session file is owner-only (0600)', (fs.statSync(store.path).mode & 0o777) === 0o600, (fs.statSync(store.path).mode & 0o777).toString(8))
+
+    // "Restart": a brand-new client, empty memory, same store. It must NOT need
+    // a password or a code.
+    const challengesBefore = server.stats.twoFactorChallenges
+    const loginsBefore = server.stats.tokenGrants.length
+    const second = new VaultClient({ serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD }, { sessionStore: store })
+    const restoredVault = await second.unlock()
+    check('a restarted client reopens the vault with no prompt', restoredVault.items.length === 4, String(restoredVault.items.length))
+    check('the restart needed no new two-factor challenge', server.stats.twoFactorChallenges === challengesBefore, `challenges ${challengesBefore}→${server.stats.twoFactorChallenges}`)
+    check('the restart reused the stored session rather than a password grant', server.stats.tokenGrants.length === loginsBefore, `grants ${loginsBefore}→${server.stats.tokenGrants.length}`)
+
+    // A session belonging to a different account must never be reused.
+    const other = new VaultClient({ serverUrl: server.url, email: 'someone-else@example.com', masterPassword: PASSWORD }, { sessionStore: store })
+    check('another account does not inherit the stored session', other.restoreSession() === false)
+
+    // Explicit sign-out wipes it.
+    second.reset()
+    check('signing out clears the stored session', !fs.existsSync(store.path))
+
+    // Idle expiry: 30 days of no use drops it.
+    const expiring = new SessionStore(path.join(dir, 'idle.json'), { maxAgeDays: 30, now: () => 1_000_000 })
+    expiring.save({ accessToken: 'a', refreshToken: 'r', serverUrl: server.url, email: EMAIL, lastUsedAt: 1_000_000 })
+    check('an idle session is still valid before the window', expiring.load() !== null)
+    expiring.now = () => 1_000_000 + 31 * 86_400_000
+    check('an idle session expires after the window', expiring.load() === null)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 
   await server.close()
