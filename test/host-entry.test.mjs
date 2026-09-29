@@ -148,6 +148,23 @@ async function main() {
       .join('\n')
     return !/#[A-Za-z_]/.test(code)
   })())
+  check('every client RPC field matches a gateway parameter', (() => {
+    // The gateway rejects args fields its parameter list does not declare, so a
+    // mismatch (a `patch` object vs. flat fields) fails at call time. Read both
+    // sides and compare the field names the browser actually sends.
+    const paramsOf = (fn) => fn.toString().slice(fn.toString().indexOf('(') + 1, fn.toString().indexOf(')')).split(',').map((part) => part.trim()).filter(Boolean)
+    const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+    const callPattern = /invoke\('([A-Za-z]+)'\s*(?:,\s*\{([^}]*)\})?/g
+    const offenders = []
+    for (const match of clientSource.matchAll(callPattern)) {
+      const [, method, body] = match
+      const declared = paramsOf(VaultGateway.prototype[method] ?? (() => {}))
+      if (!declared.length && body === undefined) continue
+      const sent = [...(body ?? '').matchAll(/([A-Za-z][\w]*)\s*:/g)].map((entry) => entry[1])
+      for (const field of sent) if (!declared.includes(field)) offenders.push(`${method}.${field}`)
+    }
+    return offenders.length === 0
+  })())
 
   // ── degraded configuration must not throw ───────────────────────────────────
   const emptyCtx = { ...fakeCtx, tools: { register: () => () => {} }, systemPrompt: { section: () => () => {} } }
