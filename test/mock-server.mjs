@@ -35,6 +35,10 @@ export const USER_ID = '7f3d9a1e-6c2b-4f5a-9d31-8b0c4e2a5f77'
 export const RFC_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
 export const RFC_URI = `otpauth://totp/RFC:test?secret=${RFC_SECRET}&issuer=RFC&algorithm=SHA1&digits=8&period=30`
 
+/** Two-factor fixtures: the single-use token and the accepted code. */
+export const TWO_FACTOR_TOKEN = 'mock-two-factor-token'
+export const TWO_FACTOR_CODE = '123456'
+
 // ── minimal SignalR-over-WebSocket server (test only) ─────────────────────────
 // Enough of RFC 6455 + the SignalR JSON protocol for the client's live-sync
 // channel: handshake, ping/pong keepalive, and server-pushed ReceiveMessage
@@ -346,7 +350,7 @@ export async function startMockServer(options = {}) {
   if (!fixtures) return null
   const { kdf, masterPasswordHash, encryptedUserKey, syncPayload, apiClientId, apiClientSecret } = fixtures
 
-  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [] }
+  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [], twoFactorChallenges: 0, twoFactorAccepted: 0 }
   const tokens = new Map()
   const hubSockets = new Set()
   const hubStats = { connections: 0, messages: 0, notifications: 0 }
@@ -442,6 +446,26 @@ export async function startMockServer(options = {}) {
           }
           if (!form.get('client_id') || !form.get('deviceIdentifier')) {
             return send(400, { error: 'invalid_request', error_description: 'missing client_id/deviceIdentifier' })
+          }
+          // Two-factor accounts: refuse the first password grant with the
+          // provider list plus the single-use token a code retry must echo.
+          if (options.twoFactor) {
+            const token = form.get('twoFactorToken')
+            const code = form.get('twoFactor')
+            if (!token || !code) {
+              stats.twoFactorChallenges++
+              return send(400, {
+                error: 'invalid_grant',
+                error_description: 'Two factor required.',
+                TwoFactorProviders: [0],
+                TwoFactorProviders2: { 0: null },
+                TwoFactorToken: TWO_FACTOR_TOKEN,
+              })
+            }
+            if (token !== TWO_FACTOR_TOKEN || code !== TWO_FACTOR_CODE) {
+              return send(400, { error: 'invalid_grant', error_description: 'Two factor code is invalid' })
+            }
+            stats.twoFactorAccepted++
           }
           return issue(form.get('client_id') ?? 'cli')
         }

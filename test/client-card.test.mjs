@@ -96,6 +96,12 @@ function makeRpc(overrides = {}) {
         return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
       }
       if (method === 'totp') return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 20, remaining: 20, algorithm: 'SHA1' } } }
+      if (method === 'config') {
+        return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
+      }
+      if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
+      if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
+      if (method === 'submitTwoFactor') return { ok: true, value: { ok: true, items: 3 } }
       return { ok: false, error: { code: 'not_found', message: `vw.${method} unknown` } }
     },
   }
@@ -235,12 +241,56 @@ async function main() {
     renderer.unmount()
   })
 
-  // ── not configured ────────────────────────────────────────────────────────
+  // ── not configured → guided setup form ────────────────────────────────────
   const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
-  const unconfigured = await mountPanel(mod, {}, makeRpc({ list: () => notConfiguredError, status: () => notConfiguredError }))
-  check('not-configured state explains what to fill in', JSON.stringify(unconfigured.renderer.toJSON()).includes('尚未配置完成'))
+  const setupRpc = makeRpc({ list: () => notConfiguredError, status: () => notConfiguredError })
+  const unconfigured = await mountPanel(mod, {}, setupRpc)
+  const setupText = JSON.stringify(unconfigured.renderer.toJSON())
+  check('unconfigured state offers the guided setup form', setupText.includes('连接 Vaultwarden') && setupText.includes('服务器地址'))
+  const setupInputs = () => unconfigured.renderer.root.findAllByType('input')
+  check('setup form renders three inputs (server/email/master)', setupInputs().length === 3, `inputs=${setupInputs().length}`)
+  check('setup form prefills the known server url', setupInputs()[0].props.value === 'https://vault.example.com')
+  check('setup master password starts empty and is a password field', setupInputs()[2].props.type === 'password' && setupInputs()[2].props.value === '')
+  const setupSave = () => unconfigured.renderer.root.findAllByType('button').find((node) => node.props.children === '保存并连接')
+  check('setup save is disabled until server + email are filled', setupSave().props.disabled === false, 'prefilled from config')
+  await act(async () => {
+    setupInputs()[2].props.onChange({ target: { value: 'master-pass-123' } })
+  })
+  await act(async () => {
+    setupSave().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const configureCall = setupRpc.calls.find((call) => call.method === 'configure')
+  check('setup writes through vw/configure', Boolean(configureCall) && configureCall.args.serverUrl === 'https://vault.example.com' && configureCall.args.masterPassword === 'master-pass-123', JSON.stringify(configureCall?.args))
   await act(async () => {
     unconfigured.renderer.unmount()
+  })
+
+  // ── two-factor challenge ──────────────────────────────────────────────────
+  const twoFactorError = { ok: false, error: { code: 'two_factor_required', message: '该账户启用了两步验证，需要验证码' } }
+  const twoFactorRpc = makeRpc({ list: () => twoFactorError, status: () => twoFactorError })
+  const challenged = await mountPanel(mod, {}, twoFactorRpc)
+  const twoFactorText = JSON.stringify(challenged.renderer.toJSON())
+  check('two-factor challenge asks for a code instead of dead-ending', twoFactorText.includes('需要两步验证码'))
+  const codeInput = () => challenged.renderer.root.findAllByType('input').find((node) => node.props.autoComplete === 'one-time-code')
+  check('two-factor form exposes a one-time-code input', Boolean(codeInput()))
+  const submitCode = () => challenged.renderer.root.findAllByType('button').find((node) => node.props.children === '提交验证码')
+  check('two-factor submit is disabled until a code is typed', submitCode().props.disabled === true)
+  await act(async () => {
+    codeInput().props.onChange({ target: { value: '123456' } })
+  })
+  await act(async () => {
+    submitCode().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  const twoFactorCall = twoFactorRpc.calls.find((call) => call.method === 'submitTwoFactor')
+  check('two-factor code is submitted through vw/submitTwoFactor', Boolean(twoFactorCall) && twoFactorCall.args.code === '123456', JSON.stringify(twoFactorCall?.args))
+  await act(async () => {
+    challenged.renderer.unmount()
   })
 
   // ── no matches ────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * Run: node test/mock-e2e.test.mjs
  */
 import { VaultClient, VaultError } from '../lib/vault.js'
-import { EMAIL, PASSWORD, startMockServer } from './mock-server.mjs'
+import { EMAIL, PASSWORD, TWO_FACTOR_CODE, TWO_FACTOR_TOKEN, startMockServer } from './mock-server.mjs'
 
 let passed = 0
 let failed = 0
@@ -165,6 +165,42 @@ async function main() {
     }
     await argonServer.close()
   }
+
+  // 13. two-factor login -------------------------------------------------------
+  const twoFactorServer = await startMockServer({ twoFactor: true })
+  const twoFactorClient = new VaultClient(settingsFor(twoFactorServer))
+  let challenge = null
+  try {
+    await twoFactorClient.unlock()
+  } catch (error) {
+    challenge = error
+  }
+  check('2FA account surfaces two_factor_required with a token', challenge?.code === 'two_factor_required' && challenge?.twoFactorToken === TWO_FACTOR_TOKEN, String(challenge?.code))
+  check('2FA challenge lists the available providers', JSON.stringify(challenge?.providers) === JSON.stringify([0]))
+  check('pending state is remembered for the retry', twoFactorClient.twoFactorPending?.provider === 0)
+
+  let wrongCode = null
+  try {
+    await twoFactorClient.loginWithTwoFactor({ code: '000000' })
+  } catch (error) {
+    wrongCode = error
+  }
+  check('a wrong 2FA code is rejected', wrongCode !== null && !/two_factor_required/.test(wrongCode.code), String(wrongCode?.message))
+
+  const twoFactorToken = await twoFactorClient.loginWithTwoFactor({ code: TWO_FACTOR_CODE })
+  check('the right 2FA code completes the login', Boolean(twoFactorToken.accessToken) && twoFactorServer.stats.twoFactorAccepted === 1)
+  check('pending state is cleared after success', twoFactorClient.twoFactorPending === null)
+  const twoFactorVault = await twoFactorClient.unlock()
+  check('2FA login unlocks the vault', twoFactorVault.items.length === 4)
+  check('missing code is a clear bad_request', await (async () => {
+    try {
+      await twoFactorClient.loginWithTwoFactor({ code: '' })
+      return false
+    } catch (error) {
+      return error.code === 'bad_request'
+    }
+  })())
+  await twoFactorServer.close()
 
   await server.close()
 

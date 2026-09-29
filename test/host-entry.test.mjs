@@ -100,7 +100,12 @@ async function main() {
   check('find tool describes the no-password rule', /不含密码/.test(tools.find((t) => t.name === 'bitwarden_find').description))
   check('create tool requires a name', (tools.find((t) => t.name === 'bitwarden_create').parameters.required ?? []).includes('name'))
   check('injects the optional settings service it needs', injected.includes('settings'), injected.join(','))
-  check('registers the settings namespace', settingsScopes[0]?.ns === 'bitwarden')
+  check('registers the settings namespace under the loader entry id', settingsScopes[0]?.ns === 'dsh-vaultwarden', String(settingsScopes[0]?.ns))
+  check('every Config field is volatile (host form renders them)', (() => {
+    const schema = settingsScopes[0]?.schema
+    const fields = schema?.dict ?? {}
+    return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
+  })())
   check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /实时同步/.test(section.text)))
   check('registers effects with labels (cleanup contract)', effects.length >= 8 && effects.every((label) => typeof label === 'string' && label.startsWith('dsh-vaultwarden:')), `${effects.length} effects`)
   check('mounts the Remote gateway instead of an HTTP route', plugins.length === 1 && plugins[0].plugin?.name === 'VaultGateway' && typeof plugins[0].config?.getClient === 'function', JSON.stringify(plugins.map((entry) => entry.plugin?.name)))
@@ -109,7 +114,7 @@ async function main() {
   const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
   const { VaultGateway } = await import('../lib/gateway.js')
   const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
-  check('gateway exposes exactly the vw methods', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove'].every((name) => markers.includes(name)), markers.join(','))
+  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'twoFactor', 'submitTwoFactor'].every((name) => markers.includes(name)), markers.join(','))
   check('gateway binds the vw namespace', Object.create(VaultGateway.prototype) instanceof Object && VaultGateway.name === 'VaultGateway')
 
   // ── degraded configuration must not throw ───────────────────────────────────
