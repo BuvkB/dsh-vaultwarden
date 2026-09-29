@@ -200,6 +200,20 @@ async function main() {
       return error.code === 'bad_request'
     }
   })())
+
+  // A fresh client (simulating a host restart that cleared memory) must still
+  // finish the challenge when the browser supplies the continuation token.
+  const restartedClient = new VaultClient(settingsFor(twoFactorServer))
+  let restartChallenge = null
+  try {
+    await restartedClient.unlock()
+  } catch (error) {
+    restartChallenge = error
+  }
+  const carriedToken = restartChallenge?.twoFactorToken
+  check('a restarted host re-issues a challenge token', carriedToken === TWO_FACTOR_TOKEN, String(carriedToken))
+  const restartedToken = await restartedClient.loginWithTwoFactor({ code: TWO_FACTOR_CODE, token: carriedToken })
+  check('an explicitly carried token completes the login after a restart', Boolean(restartedToken.accessToken) && twoFactorServer.stats.twoFactorAccepted === 2)
   await twoFactorServer.close()
 
   await server.close()

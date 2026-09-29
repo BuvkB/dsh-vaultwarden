@@ -100,7 +100,7 @@ function makeRpc(overrides = {}) {
         return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
       }
       if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
-      if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
+      if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0, token: 'mock-continuation-token' } }
       if (method === 'submitTwoFactor') return { ok: true, value: { ok: true, items: 3 } }
       return { ok: false, error: { code: 'not_found', message: `vw.${method} unknown` } }
     },
@@ -298,6 +298,7 @@ async function main() {
   })
   const twoFactorCall = twoFactorRpc.calls.find((call) => call.method === 'submitTwoFactor')
   check('two-factor code is submitted through vw/submitTwoFactor', Boolean(twoFactorCall) && twoFactorCall.args.code === '123456', JSON.stringify(twoFactorCall?.args))
+  check('the continuation token travels back with the code', twoFactorCall?.args.token === 'mock-continuation-token', JSON.stringify(twoFactorCall?.args))
   await act(async () => {
     challenged.renderer.unmount()
   })
