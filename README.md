@@ -36,7 +36,7 @@
 | `pollIntervalSeconds` | WebSocket 不可用时的轮询间隔（默认 60 秒，最小 5） |
 | `cacheMinutes` | 解锁后的内存缓存时长（默认 30 分钟） |
 | `deviceIdentifier` | 可选设备标识。官方桌面/浏览器客户端会持久化稳定值；**留空按「服务器+邮箱」确定性派生，不写盘** |
-| `accessMode` | 写权限：`readonly`（默认，拒绝写回）/ `auto`（允许 create/update/delete，仅个人条目） |
+| `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（每次写回需用户确认）/ `auto`（直接写回）。仅个人条目，组织条目明确报错 |
 
 ### 2. 环境变量
 
@@ -55,9 +55,9 @@ bitwarden_get   { "id": "…", "field": "password" }     → 用户名 + 密码
 bitwarden_get   { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码
 bitwarden_status{ "refresh": true }                    → 状态报告（含 liveSync: 模式/连接/最近同步）
 bitwarden_sync  { }                                    → 强制重新同步
-bitwarden_create{ "name": "新站点", "username": "…", "password": "…" } → 写回（需 accessMode=auto）
-bitwarden_update{ "id": "…", "password": "新密码" }     → 改密（需 accessMode=auto）
-bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（需 accessMode=auto）
+bitwarden_create{ "name": "新站点", "username": "…", "password": "…" } → 写回（需 accessMode=ask/auto）
+bitwarden_update{ "id": "…", "password": "新密码" }     → 改密（需 accessMode=ask/auto）
+bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（需 accessMode=ask/auto）
 ```
 
 ## 用法（人侧）
@@ -79,7 +79,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 - 主密码、用户密钥、解密后的条目**只存在内存**，不写盘、不打日志；插件只持久化用户填写的配置。
 - 配置表单由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）；面板数据走 `/api` connection RPC（已认证会话），**没有绕过鉴权的自建路由**。
 - 工具返回的明文凭据会进入会话上下文（这是"让模型能用密码"的前提）。提示词要求模型不要回显、不要写入文件。
-- 写回默认关闭（`accessMode: readonly`）；开启后也只能写个人条目，组织条目明确报错。
+- 写回默认关闭（`accessMode: readonly`）；`ask` 档每次写入都走 DSH 审批确认，`auto` 直接写入。两者都只能写个人条目，组织条目明确报错。
 - 与本地 `dsh-vault` 插件**无标识冲突**（条目 id / 工具名 / 设置命名空间 / 设置页 id 均不同）：本插件是 `dsh-vaultwarden` ↔ `bitwarden_*` ↔ `bitwarden` ↔ `vaultwarden`，dsh-vault 是 `vault` ↔ `vault_*` ↔ `settings.vault` ↔ `vault`。
 
 ## 排错

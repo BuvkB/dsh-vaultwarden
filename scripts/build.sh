@@ -100,6 +100,11 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== gateway sign-in flow test ==="
   node test/gateway-flow.test.mjs
 
+  # Permission tiers: readonly refuses, ask routes through the approval seam,
+  # auto writes straight through.
+  echo "=== access mode tier test ==="
+  node test/access-mode.test.mjs
+
   # Cross-implementation check against the official Bitwarden CLI. It skips
   # itself (exit 0) when the CLI or openssl is unavailable.
   echo "=== official CLI interop test ==="
