@@ -237,7 +237,16 @@ async function main() {
   })
   check('the show toggle reveals the password', text().includes('gh-p@ssw0rd-42'))
 
-  // reprompt gate
+  // reprompt gate: going back to the list is now a step (one level at a time)
+  const backToList = () => buttons().find((node) => /返回列表/.test(String(node.props.children ?? '')))
+  check('the detail view offers a way back to the list', Boolean(backToList()))
+  await act(async () => {
+    backToList().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  check('going back restores the list', rows().length === 3, `rows=${rows().length}`)
   await act(async () => {
     rows()[2].props.onClick()
   })
