@@ -80,6 +80,13 @@ fi
 
 # ── tests ────────────────────────────────────────────────────────────────────
 if [ "${SKIP_TESTS:-0}" != "1" ]; then
+  # Manifest guard: every declared peer range must admit the harness builds
+  # that are published on npm. npm applies the prerelease rule strictly, so a
+  # range without explicit prerelease branches breaks `npm install` (the
+  # marketplace fallback path) even though the loader accepts it.
+  echo "=== peer range test (manifest vs published harness builds) ==="
+  node test/peer-ranges.test.mjs
+
   echo "=== offline end-to-end test (mock Vaultwarden) ==="
   node test/mock-e2e.test.mjs
 

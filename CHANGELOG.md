@@ -4,6 +4,48 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] — 2026-09-30
+
+Installable again from npm. No breaking changes.
+
+### Fixed
+
+- **`npm install` failed with `ERESOLVE` against every current DSH build.**
+  Every published `@deepseek-ai/dsh-*` build is a prerelease, and npm only
+  admits a prerelease when the range carries an explicit branch for its
+  `major.minor.patch` tuple. `>=0.1.0-rc.1 <0.3.0-0` therefore admitted 5 of
+  the 30 published `@deepseek-ai/dsh-tools` builds and rejected the rest,
+  including the harness this plugin runs on. The harness loader itself checks
+  peers with `{ includePrerelease: true }`, so nothing failed at load time —
+  only the npm path, which is exactly the path the marketplace falls back to.
+  Both `@deepseek-ai/dsh-tools` and `@deepseek-ai/dsh-typert-protocol` now
+  enumerate the published release lines (`^0.1.0-0 || … || ^0.2.0-0`), which
+  admits 26 of 30 builds — everything from the 0.1.0 line onward.
+- **`@deepseek-ai/schemastery` had the same trap.** `^3.18.0` rejected the
+  published `3.18.1-rc.1` / `3.18.1-rc.4` builds; the range now carries a
+  `^3.18.1-0` branch and admits all six published versions.
+- **The `cordis` peer named a package the runtime does not ship.** The
+  declaration was the bare name `cordis` (an unrelated npm package, and not
+  installed anywhere in a DSH tree), so the peer could never resolve; it is
+  now `@deepseek-ai/cordis` with the range `>=4.0.1-rc.1 <5`, which admits
+  every published build and refuses `4.0.0-rc.x` / `5.x`.
+
+### Added
+
+- **`test/peer-ranges.test.mjs`** — a manifest guard that resolves a semver
+  copy from the local DSH installation, checks every peer range against the
+  hard-coded `npm view <pkg> versions` fixtures, and pins the versions that
+  must stay refused (`0.0.1-rc.*`, `0.3.0`, `4.0.0-rc.10`, `5.0.0`, …). It
+  fails with 13 checks against the previous manifest and passes against the
+  new one, so the trap cannot come back unnoticed. Skips itself (exit 0) when
+  no DSH installation is reachable, like the CLI interop suite.
+
+### Notes
+
+- The version lists in the guard are fixtures, not a live lookup: update them
+  when the harness publishes a release.
+- 252 offline tests across eight suites (`bash scripts/build.sh`).
+
 ## [0.2.3] — 2026-09-29
 
 Panel copy and phone layout. No breaking changes.
@@ -154,8 +196,10 @@ dependencies beyond an optional `hash-wasm` (Argon2id KDF).
 
 ### Notes
 
-- `peerDependencies` use explicit prerelease branches
-  (`>=0.1.0-rc.1 <0.3.0-0`) so rc builds of DSH resolve correctly.
+- `peerDependencies` enumerate the published DSH release lines
+  (`^0.1.0-0 || … || ^0.2.0-0`) with an explicit prerelease branch per tuple,
+  because npm admits a prerelease only through a comparator carrying the same
+  `major.minor.patch`. See the 0.2.4 entry above.
 - Verified against Vaultwarden 2026.6.0 (`/notifications/hub` reachable,
   two-factor account, 431 entries).
 - 204 offline tests across seven suites (`bash scripts/build.sh`).
