@@ -276,6 +276,98 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 
+  // ── boot: one round trip that revives the stored session ─────────────────
+  // The reported loop: the panel opened with `config` + `session`, and
+  // `session` reports the in-memory token only. After a restart that token is
+  // gone, and an access token older than an hour is treated exactly the same
+  // way — so a device that had once signed in was asked for its password (and
+  // its code) again. `boot` restores the stored file, in one call.
+  {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { SessionStore } = await import('../lib/session-store.js')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vw-boot-'))
+    const store = new SessionStore(path.join(dir, 'session.json'), { maxAgeDays: 30 })
+    const settings = { serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD, apiKeyClientId: '', apiKeyClientSecret: '', cacheMinutes: 30, websocket: true, pollIntervalSeconds: 300, deviceIdentifier: '', accessMode: 'readonly', sessionDays: 30 }
+    const owner = { getSettings: () => settings, update: async () => {} }
+    // A new "process": fresh memory, same store — what the plugin restart
+    // that follows every settings write looks like.
+    const bootGateway = (overrides = {}) => {
+      const nextClient = new VaultClient({ ...settings, ...overrides }, { sessionStore: store })
+      const gateway = Object.create(VaultGateway.prototype)
+      gateway.getClient = () => nextClient
+      gateway.createClient = (override) => new VaultClient({ ...settings, ...overrides, ...override }, { sessionStore: store })
+      gateway.owner = owner
+      gateway.mutations = null
+      gateway.pendingProbe = null
+      gateway.pendingPatch = null
+      return { gateway, client: nextClient }
+    }
+
+    const grantsBefore = server.stats.tokenGrants.length
+    const challengesBefore = server.stats.twoFactorChallenges
+    const refreshesBefore = server.stats.refreshes
+
+    // Fresh install: nothing stored, so the panel must fall back to the
+    // credential form. A password grant here (or a challenge) would put the
+    // user on the code screen on every visit.
+    const fresh = await bootGateway().gateway.boot()
+    check('boot reports no resumed session with nothing stored', fresh?.resumed === false, JSON.stringify(fresh))
+    check('boot still returns the configuration', fresh?.config?.serverUrl === server.url, JSON.stringify(fresh?.config?.serverUrl))
+    check('boot does not start a password grant', server.stats.tokenGrants.length === grantsBefore, `${grantsBefore}→${server.stats.tokenGrants.length}`)
+    check('boot does not trigger a two-factor challenge', server.stats.twoFactorChallenges === challengesBefore, `${challengesBefore}→${server.stats.twoFactorChallenges}`)
+
+    // Sign in once (with the code), which persists the session.
+    const signedIn = bootGateway()
+    try {
+      await signedIn.client.unlock()
+    } catch {
+      /* expected challenge */
+    }
+    await signedIn.client.loginWithTwoFactor({ code: TWO_FACTOR_CODE, provider: 0, remember: true })
+    check('the sign-in persisted the session', fs.existsSync(store.path))
+    // Baselines after the sign-in: the password grant and the challenge below
+    // belong to it, and would otherwise be counted against the restart.
+    const grantsAfterSignIn = server.stats.tokenGrants.length
+    const challengesAfterSignIn = server.stats.twoFactorChallenges
+
+    // "Restart": a brand-new gateway over the same store. Opening the panel.
+    const reopened = bootGateway()
+    const resumed = await reopened.gateway.boot()
+    check('boot revives the stored session after a restart', resumed?.resumed === true, JSON.stringify(resumed))
+    check('boot reports the revived session as authenticated', resumed?.session?.authenticated === true, JSON.stringify(resumed?.session))
+    check('the reviving boot needs no new password grant', server.stats.tokenGrants.length === grantsAfterSignIn, `${grantsAfterSignIn}→${server.stats.tokenGrants.length}`)
+    check('the reviving boot needs no new challenge', server.stats.twoFactorChallenges === challengesAfterSignIn, `${challengesAfterSignIn}→${server.stats.twoFactorChallenges}`)
+    const listed = await reopened.gateway.list('', 50)
+    check('the revived session reads the vault', listed?.items?.length === 4, String(listed?.items?.length))
+
+    // An access token one hour old used to look exactly like "signed out":
+    // resumeSession must swap the refresh token instead of giving up. What gets
+    // restored is the stored record, so age the record, not the memory.
+    {
+      const record = JSON.parse(fs.readFileSync(store.path, 'utf8'))
+      record.expiresAt = Date.now() - 3_600_000
+      fs.writeFileSync(store.path, JSON.stringify(record), { mode: 0o600 })
+    }
+    const aged = await bootGateway().gateway.boot()
+    check('boot swaps an aged access token instead of signing out', aged?.resumed === true, JSON.stringify(aged))
+    check('the aged session was refreshed, not re-logged in', server.stats.refreshes === refreshesBefore + 1, `refreshes ${refreshesBefore}→${server.stats.refreshes}`)
+    const grantsAfterRefresh = server.stats.tokenGrants.length
+    check('the refresh cost no password grant', server.stats.tokenGrants.length === grantsAfterSignIn + 1, `${grantsAfterSignIn + 1}→${server.stats.tokenGrants.length}`)
+
+    // Re-submitting the stored credentials — the usual sign-in path — must not
+    // delete the stored session. connect() used to invalidate() hard here,
+    // which wiped the file and forced a fresh password grant (a two-factor
+    // account then had to type a code every single time).
+    const sameValues = await reopened.gateway.connect(server.url, EMAIL, PASSWORD)
+    check('re-submitting the stored credentials still signs in', sameValues?.ok === true, JSON.stringify(sameValues))
+    check('re-connecting keeps the stored session file', fs.existsSync(store.path), String(fs.existsSync(store.path)))
+    check('re-connecting starts no new token request', server.stats.tokenGrants.length === grantsAfterRefresh, `${grantsAfterRefresh}→${server.stats.tokenGrants.length}`)
+
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+
   await server.close()
   console.log(`\n${passed} passed, ${failed} failed`)
   if (failed > 0) process.exitCode = 1

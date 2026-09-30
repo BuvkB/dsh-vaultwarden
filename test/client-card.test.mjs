@@ -38,6 +38,18 @@ if (typeof globalThis.window === 'undefined' || typeof globalThis.window.addEven
   }
 }
 
+// The browser hands out localStorage; react-test-renderer does not. The panel
+// keeps the last successful read there so a reload can paint instantly, and the
+// tests below drive that store directly. The key must match lib/client.js.
+const SNAPSHOT_KEY = 'dsh-vaultwarden:snapshot'
+const storageMock = {
+  store: new Map(),
+  getItem(key) { return this.store.has(key) ? this.store.get(key) : null },
+  setItem(key, value) { this.store.set(key, String(value)) },
+  removeItem(key) { this.store.delete(key) },
+}
+globalThis.localStorage = storageMock
+
 let passed = 0
 let failed = 0
 const check = (label, condition, detail = '') => {
@@ -80,6 +92,15 @@ const REVEALS = {
 }
 const CONFIRMED_REVEAL = { ...REVEALS['item-3'], repromptRequired: undefined, password: 'reprompt-pass-9', username: 'reprompt-user' }
 
+/** The hosted configuration the panel opens with. */
+const CONFIG_VALUE = { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' }
+/** `boot`'s view of a live session. */
+const AUTHED_SESSION = { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true }
+/** `boot`'s view of a session the host could not revive. */
+const SIGNED_OUT_SESSION = { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false }
+/** One `boot` answer, shaped the way the gateway returns it. */
+const bootWith = (config, resumed, session) => ({ ok: true, value: { config, resumed: Boolean(resumed), session } })
+
 /** Build a stubbed `connection.rpc.call` over canned `vw/*` payloads. */
 function makeRpc(overrides = {}) {
   const calls = []
@@ -102,14 +123,16 @@ function makeRpc(overrides = {}) {
         return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
       }
       if (method === 'totp') return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 20, remaining: 20, algorithm: 'SHA1' } } }
-      if (method === 'config') {
-        return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
-      }
+      if (method === 'config') return { ok: true, value: CONFIG_VALUE }
       if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
       if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
-      // Default: a session is already live, so the panel renders the vault.
-      // Tests that need the sign-in screen override this.
-      if (method === 'session') return { ok: true, value: { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true } }
+      // Default: a stored session, so the panel renders the vault. The host
+      // revives it from disk inside `boot` — that used to be two sequential
+      // RPCs (`config` then `session`) and neither of them restored it, which
+      // is why a restart (or an expired access token) demanded a password
+      // again. Tests that need the sign-in screen override this with
+      // `resumed: false`.
+      if (method === 'boot') return { ok: true, value: { config: CONFIG_VALUE, resumed: true, session: AUTHED_SESSION } }
       if (method === 'submitTwoFactor') return { ok: true, value: { ok: true, items: 3 } }
       return { ok: false, error: { code: 'not_found', message: `vw.${method} unknown` } }
     },
@@ -232,6 +255,16 @@ async function main() {
     })
     check('clicking the chip triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
   }
+  // ── one round trip, and no sign-in for a stored session ──────────────────
+  // Opening used to cost two sequential RPCs (config, then session), and the
+  // answer to `session` was the in-memory token only: after a restart — or an
+  // hour later, when the access token aged out — a perfectly good device was
+  // asked to type its password again. `boot` answers both in one call and
+  // revives the stored session from disk while it is in there.
+  check('opening asks the host for boot', rpc.calls.some((call) => call.method === 'boot'), JSON.stringify(rpc.calls.map((call) => call.method)))
+  check('opening no longer asks for config and session separately', !rpc.calls.some((call) => call.method === 'session'))
+  check('a revived session is drawn without a fresh login', !rpc.calls.some((call) => call.method === 'connect'))
+
   check('panel shows the vault size', text().includes(`共 ${ITEM_COUNT} 条`))
   check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
@@ -305,7 +338,7 @@ async function main() {
   // error code, which does not survive the RPC boundary).
   const unconfiguredConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
   const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
-  const setupRpc = makeRpc({ config: () => unconfiguredConfig, list: () => notConfiguredError, status: () => notConfiguredError })
+  const setupRpc = makeRpc({ boot: () => bootWith(unconfiguredConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
   const unconfigured = await mountPanel(mod, {}, setupRpc)
   const setupText = JSON.stringify(unconfigured.renderer.toJSON())
   check('unconfigured state offers the guided setup form', setupText.includes('连接 Vaultwarden') && setupText.includes('服务器地址'))
@@ -344,8 +377,7 @@ async function main() {
   // it must be reachable from the panel, not only from the host's plugin config.
   {
     const apiConfig = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, apiKeyClientId: '' } }
-    const signedOut = { ok: true, value: { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false } }
-    const rpc = makeRpc({ config: () => apiConfig, session: () => signedOut })
+    const rpc = makeRpc({ boot: () => bootWith(apiConfig.value, false, SIGNED_OUT_SESSION) })
     const panel = await mountPanel(mod, {}, rpc)
     const text = () => JSON.stringify(panel.renderer.toJSON())
     check('the sign-in form offers a method selector', text().includes('登录方式') && text().includes('API 密钥'))
@@ -463,13 +495,38 @@ async function main() {
 
   // A hard failure keeps a way back too (wrong password, expired challenge…).
   const hardFailError = { ok: false, error: { code: 'bad_credentials', message: '登录失败：邮箱或主密码不正确' } }
-  const hardFail = await mountPanel(mod, {}, makeRpc({ config: () => ({ ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }), list: () => hardFailError, status: () => hardFailError }))
+  const hardFail = await mountPanel(mod, {}, makeRpc({ boot: () => bootWith({ serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false }, true), list: () => hardFailError, status: () => hardFailError }))
   const hardFailText = JSON.stringify(hardFail.renderer.toJSON())
   check('a failed login explains the failure', hardFailText.includes('登录失败'))
   check('a failed login still offers a way back', hardFailText.includes('返回设置，重新填写'))
   await act(async () => {
     hardFail.renderer.unmount()
   })
+
+  // ── an older host must not dead-end the panel either ──────────────────────
+  // `vw/boot` arrived in v0.2.5. A page bundle from that release can briefly
+  // talk to a host half from before it (stale page after an upgrade), and an
+  // unknown method would otherwise render "尚未配置完成" on a fully configured
+  // vault. The old config + session pair is the fallback.
+  {
+    const unknownMethod = { ok: false, error: { code: 'unknown_method', message: 'vw/boot is not a registered remote method' } }
+    const rpc = makeRpc({
+      boot: () => unknownMethod,
+      config: () => ({ ok: true, value: CONFIG_VALUE }),
+      session: () => ({ ok: true, value: AUTHED_SESSION }),
+      // The list payload the default route builds; spell it out so this
+      // scenario does not depend on the default list filter.
+      list: () => ({ ok: true, value: { query: '', matched: ITEM_COUNT, returned: ITEM_COUNT, vaultItems: ITEM_COUNT, items: ITEMS } }),
+      status: () => ({ ok: true, value: STATUS_REPORT }),
+    })
+    const panel = await mountPanel(mod, {}, rpc)
+    const legacyText = JSON.stringify(panel.renderer.toJSON())
+    check('a host without vw/boot still opens the list', legacyText.includes('实时同步') && !legacyText.includes('尚未配置完成'))
+    check('a host without vw/boot is never asked to log in', rpc.calls.filter((call) => call.method === 'connect').length === 0)
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
 
   // ── a failing config RPC must not dead-end the panel ─────────────────────
   // The reported bug rendered "尚未配置完成" + 重试 when `config` rejected, and
@@ -478,7 +535,7 @@ async function main() {
   // the form has to stay on screen.
   {
     const failingConfig = { ok: false, error: { code: 'not_configured', message: '未配置 Vaultwarden 服务器地址' } }
-    const rpc = makeRpc({ config: () => failingConfig, list: () => failingConfig, status: () => failingConfig })
+    const rpc = makeRpc({ boot: () => failingConfig, list: () => failingConfig, status: () => failingConfig })
     const panel = await mountPanel(mod, {}, rpc)
     const failureText = JSON.stringify(panel.renderer.toJSON())
     check('a failing config RPC still offers the guided setup form', failureText.includes('连接 Vaultwarden') && failureText.includes('服务器地址'))
@@ -495,7 +552,7 @@ async function main() {
   {
     const cfg = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }
     const live = { ok: true, value: { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true } }
-    const rpc = makeRpc({ config: () => cfg, session: () => live })
+    const rpc = makeRpc({ boot: () => bootWith(cfg.value, true, live.value) })
     const first = await mountPanel(mod, {}, rpc)
     await act(async () => {
       await sleep(60)
@@ -524,6 +581,52 @@ async function main() {
     })
   }
 
+  // ── reload: the snapshot outlives the module scope ───────────────────────
+  // Closing the settings dialog unmounts the panel, and the host shell
+  // re-evaluates the bundle on the next open, so the module-level cache is
+  // gone by then. The last read is therefore also kept in localStorage.
+  {
+    // A freshly loaded bundle: its module scope is empty, exactly like a
+    // page reload. (keepCache only suppresses the test hook that wipes the
+    // shared storage, so the earlier read is still there to paint.)
+    const { mod: reloaded } = loadModule()
+    let releaseBoot = null
+    const slowBoot = makeRpc({
+      boot: () => new Promise((resolve) => { releaseBoot = () => resolve(bootWith(CONFIG_VALUE, true, AUTHED_SESSION)) }),
+    })
+    const panel = await mountPanel(reloaded, {}, slowBoot, { keepCache: true })
+    const painted = JSON.stringify(panel.renderer.toJSON())
+    check('a reload paints the stored list before the host answers', painted.includes('GitHub 工作账号'), painted.slice(0, 120))
+    check('the reload does not wait for the host to draw', slowBoot.calls.length === 1, JSON.stringify(slowBoot.calls.map((call) => call.method)))
+    await act(async () => {
+      releaseBoot?.()
+    })
+    await act(async () => {
+      await sleep(60)
+    })
+    check('the stored list is refreshed once the host answers', JSON.stringify(panel.renderer.toJSON()).includes('GitHub 工作账号'))
+    check('the refreshed read is stored again', storageMock.store.has(SNAPSHOT_KEY))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a signed-out reload must not show the stored entries ─────────────────
+  // Painting first is only safe because the snapshot is dropped the moment
+  // the host says there is no session: otherwise a signed-out panel — or one
+  // belonging to another account — would still greet the reader with rows.
+  {
+    const { mod: reloaded } = loadModule()
+    const dropped = makeRpc({ boot: () => bootWith(CONFIG_VALUE, false, SIGNED_OUT_SESSION) })
+    const panel = await mountPanel(reloaded, {}, dropped, { keepCache: true })
+    const text = JSON.stringify(panel.renderer.toJSON())
+    check('a reload without a session shows the sign-in form only', text.includes('登录 Vaultwarden') && !text.includes('实时同步'), text.slice(0, 120))
+    check('the stored snapshot is erased', storageMock.store.size === 0, String(Array.from(storageMock.store.keys())))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
   // ── sign-in flow: credentials first, code screen only after they verify ────
   const signedOutConfig = { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false } }
   const signedOut = { ok: true, value: { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false } }
@@ -531,7 +634,7 @@ async function main() {
 
   // Opening with credentials stored but no session must ask to sign in — NOT
   // jump straight to the code screen (the reported bug).
-  const signInRpc = makeRpc({ config: () => signedOutConfig, session: () => signedOut })
+  const signInRpc = makeRpc({ boot: () => bootWith(signedOutConfig.value, false, signedOut.value) })
   const signedOutPanel = await mountPanel(mod, {}, signInRpc)
   const signInText = JSON.stringify(signedOutPanel.renderer.toJSON())
   check('a stored credential set lands on the sign-in form, not the code screen', signInText.includes('登录 Vaultwarden') && !signInText.includes('需要两步验证码'))
@@ -539,8 +642,7 @@ async function main() {
 
   // Submitting credentials that need 2FA advances to the code screen.
   const connectRpc = makeRpc({
-    config: () => signedOutConfig,
-    session: () => signedOut,
+    boot: () => bootWith(signedOutConfig.value, false, signedOut.value),
     connect: () => twoFactorChallenge,
   })
   const connecting = await mountPanel(mod, {}, connectRpc)
@@ -563,8 +665,7 @@ async function main() {
 
   // A rejected password must stay on the sign-in form and say so.
   const badPasswordRpc = makeRpc({
-    config: () => signedOutConfig,
-    session: () => signedOut,
+    boot: () => bootWith(signedOutConfig.value, false, signedOut.value),
     connect: () => ({ ok: false, error: { code: 'bad_credentials', message: '邮箱或主密码不正确' } }),
   })
   const badPassword = await mountPanel(mod, {}, badPasswordRpc)
