@@ -1,6 +1,6 @@
 # 前端设计说明（dsh-vaultwarden 浏览器半边）
 
-> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（24 项）。
+> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（83 项，含 localStorage 快照、`vw/boot` 打桩与旧宿主回退）。
 > 设计基线：与宿主设置页同水准；明暗双主题；仅 `--dsw-alias-*` 令牌；可访问性达标。
 
 ## 1. 一个界面，一个槽位
@@ -70,8 +70,22 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 - 主密码/API secret 在宿主派生的表单里是只写字段（留空=不修改），已存值不回显。
 - 面板所有数据走 `/api` connection RPC —— 该通道自带操作者鉴权，插件不注册任何自有 HTTP 路由。
 
+
+## 7. 开箱体验：静默恢复 + 先绘制后请求
+
+**开面板的时序**（`VaultPanel` 的 `load()`）：
+
+1. 同步绘制：`openCache`（同页）→ localStorage 快照（重载后）。有就立刻 `ready`，没有才 `loading`。
+2. 一次 `vw/boot`：`{ config, resumed, session }`。Host 侧 `resumeSession()` 只读盘会话 + 必要时刷新 refresh token，**从不发起登录**（否则两步验证账号每次开面板都被拦）。
+3. 身份校验：快照的 `serverUrl + email` 与 `boot.config` 不一致 → 丢快照回到 `loading`；未配置 → 清快照进引导；`resumed: false` → 清快照进登录表单。
+4. 后台刷新：`vw/list` 与 `vw/status` **并行**发出，成功后回写两级缓存。
+
+**为什么要这种顺序**：凭据列表只含摘要（名称/类型/用户名/URI/目录/徽标），没有密码与 TOTP 明文，可以安全驻留 localStorage；
+快照按「服务器 + 邮箱」绑定，且在宿主报告登出时立即删除。宿主侧同时把「开一次面板」从两次串行 RPC 降为一次，列表与状态并行，
+插件激活时后台预热（`resumeSession` + `unlock` 填解密缓存），重启后第一次开面板不再付全量同步的代价。
+
 ## 6. 自验
 
-- `node test/client-card.test.mjs`：37 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态）。
+- `node test/client-card.test.mjs`：83 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**）。
 - 主题合规：全部颜色经 `var(--vw-*, var(--dsw-alias-*, #fallback))`，无 var() fallback 之外的硬编码色值；无 opacity 压暗文字；`state-*` 不用于正文。
 - 待办：安装进 profile 后做明暗双主题截图核对（见项目任务清单）。

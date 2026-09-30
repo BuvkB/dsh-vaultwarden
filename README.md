@@ -135,7 +135,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 252 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 279 项）
 ```
 
 | 套件 | 覆盖 |
@@ -145,9 +145,9 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测�
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
 | `test/host-entry.test.mjs`（21） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
-| `test/gateway-flow.test.mjs`（35） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 |
+| `test/gateway-flow.test.mjs`（51） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（72） | 条目面板 + 徽标手动同步 + 重开缓存（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（83） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ 旧宿主回退（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 
@@ -167,6 +167,24 @@ Vaultwarden 的两步验证是**两步**：先验证主密码，再提交动态�
 
 > ⚠️ 该文件等同于主密码的保护级别：能读到它就能解密保险库。这与插件已把 `masterPassword` 存在 profile 配置里（为了能无人值守解锁）是同一权衡，官方客户端的「记住我 / PIN 解锁」也是同样取舍。
 
+### 静默恢复：开面板不再要一遍密码
+
+登录信息会**加密落盘**（`~/.dsh/data/dsh-vaultwarden/session.json`，`0600`，其中含 refresh token；access token 只有 1 小时寿命）。
+插件开面板（以及每次启动预热）时先**静默恢复**：读盘 → access token 还在 → 直接用；
+access token 过期了 → 用 refresh token 换一张新的。**全程不会自动登录，所以不会弹两步验证**。
+弹登录表单只剩两种情况：盘上真的没有会话（首次配置、登出过、或闲置超过 `sessionDays`），或 refresh token 也失效了。
+
+> 0.2.5 之前这里有两个 bug：access token 1 小时一过，面板就以为你被登出了；
+> 而「用同一套账号密码点验证并登录」会先把盘上会话删掉再登，逼着你重输密码+验证码。
+
+### 秒开：先绘制，再请求
+
+开面板时面板**先把上一次成功的列表画出来**（内存缓存 + `localStorage` 快照，5 分钟内有效），
+再向宿主要最新数据；快照只含列表本来就显示的内容（名称/类型/用户名/URI/目录/徽标），**不含密码与动态码**，
+并按「服务器 + 邮箱」绑定——换了账号不会看到别人的条目。一旦宿主报告你已登出，快照立即清除。
+宿主侧同样做了减法：开面板改为一次 `boot` RPC（配置 + 会话 + 是否恢复），列表与状态两个请求并行发出；
+插件激活时还会在后台预热会话与解密缓存，重启 dsh 后第一次开面板也不用等全量同步。
+实测（mock 服务端）：一次登录 + 两次「重启」后开面板，**0 次密码授权、0 次两步验证、0 次 refresh**，列表 4–11 ms 返回。
 ### 通行密钥（passkey / WebAuthn）不支持
 
 Vaultwarden 的通行密钥是一种 **2FA 方式**，但它必须由**浏览器调用 `navigator.credentials` 并配合认证器上的用户手势**（指纹/面容/PIN）才能完成——这是 WebAuthn 防自动化的核心设计。插件运行在无头 Node 进程中，**没有浏览器和认证器，物理上无法完成这个仪式**，因此不支持，未来也不会支持。
