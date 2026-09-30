@@ -6,75 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.5] — 2026-10-01
 
-No breaking changes. Two real bugs fixed, one felt in the wallet: the sign-in
-form kept coming back, and the panel kept starting from a blank screen.
+### 新增
 
-### Fixed
+- 打开凭据库面板自动恢复登录：访问令牌过期或重启后，直接用已保存的会话自动续期，不再要求重新登录。
+- 打开面板立即显示条目：列表先渲染本地快照，再后台从服务器刷新。
+- 插件启动即预热：插件加载时就在后台恢复会话、填充解密缓存，重启后第一次打开面板不再等待。
+- 新增 `vw/boot` 接口：一次请求同时拿到配置与登录状态；不支持的旧宿主自动回退原逻辑，条目列表照常打开、不要求登录。
+- 列表读取与连接状态探测并行执行，探测失败不再拖累列表。
 
-- **A stored session was never used, so the panel asked for a password every
-  hour.** The panel's open path asked the host for `config` and `session` and,
-  when `session` said "not authenticated", jumped straight to the credential
-  form — it never tried the session file. `VaultClient.session` reads the
-  in-memory token only, and Bitwarden access tokens live **one hour**, so an
-  untouched session looked signed-out at the top of the hour even though a
-  refresh token was sitting right there in the store. The panel now goes
-  through the new `vw/boot`, which silently revives the stored session
-  (`resumeSession()`: restore, swap the refresh token when the access token has
-  aged) and only then reports the state — **it never starts a login**, so an
-  account with two-factor is not challenged on a mere panel open.
-  Verified against the mock server: two restarts after one sign-in cost
-  **0 password grants, 0 challenges, 0 refreshes**, and `list` answered in
-  4–11 ms from cache.
-- **Signing in with the same values deleted the stored session first.**
-  `connect()` hit `client.invalidate()` on the "nothing changed" branch, and
-  `invalidate()` without `keepStored` **clears the session file** before the new
-  login — which is why `session.json` was always missing, and why every
-  re-login was a full password grant (read: a two-factor prompt) even for an
-  account that had already typed a code. It now calls
-  `invalidate({ keepStored: true })`, so the stored session is the easy path
-  and re-submitting the same credentials is a no-op.
+### 修复
 
-### Added
+- 修复每隔一小时就要求重新登录的问题。
+- 修复已保存的会话被误删、每次登录都要重输两步验证码的问题。
+- 修复旧宿主上打不开条目列表的问题。
 
-- **`vw/boot`** — one RPC that returns the configuration, the session and
-  whether a stored session was revived, replacing the panel's `config` +
-  `session` pair (one round trip instead of two). It revives silently and never
-  logs in; only an API-key configuration (no two-factor exists there) may fall
-  back to `ensureToken()`.
-- **Panel cache that survives a page reload** (`localStorage`). The last
-  successful list/status read is stored next to the in-memory cache and
-  painted **before any host call**, so a reload — which the settings host
-  forces whenever the dialog is re-opened — shows the entries immediately
-  instead of a blank panel plus a spinner. The snapshot is scoped to the
-  server + account, holds only what the list already shows (no password, no
-  TOTP secret) and is erased the moment the host reports a sign-out.
-- **Activation warm-up** (`lib/index.js`). On activate the plugin revives the
-  stored session and fills the decrypt cache in the background, so the first
-  panel open after a restart no longer pays for a full sync.
-- Parallel reads: the list read and the status probe now fire together
-  (`Promise.all`) instead of queueing, and a failing status probe no longer
-  costs the list.
+### 测试
 
-### Tests
-
-- `test/client-card.test.mjs` now stubs `boot` (83 checks, was 72): the panel
-  asks for `boot` and no longer for `config`/`session`, a revived session is
-  drawn without a login, a **reload paints the stored list before the host
-  answers**, and a signed-out reload shows only the credential form while
-  erasing the snapshot.
-- `test/gateway-flow.test.mjs` gained a `boot` section (51 checks, was 35): a
-  fresh install reports `resumed: false` with no grant or challenge; a restart
-  reports `resumed: true`, reads the vault and adds no grant or challenge; an
-  **aged access token is refreshed instead of signing out** (the regime proof:
-  `resumeSession` reads the stored record, so ageing the record drives the
-  refresh); and re-submitting the stored credentials keeps the session file on
-  disk.
-
-Full suite: 279 checks across 8 files, all green (client-card grew two
-more for the legacy-host fallback: a stale bundle against an older host
-still opens the list, and is never asked to log in). `test/cli-interop.mjs`
-(the official-CLI cross-check) is unchanged and still skips itself when `bw`
-is absent.
+- 客户端组件测试改用 `boot` 接口（83 项，原 72），覆盖快照先渲染、登出后不渲染列表等场景。
+- 网关流程测试新增 `boot` 一节（51 项，原 35），含旧宿主回退两条断言（仍能打开列表、不要求登录）。
+- 全套测试 279 项，8 个文件全部通过。
 
 ## [0.2.4] — 2026-09-30
 
