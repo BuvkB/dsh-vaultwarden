@@ -105,11 +105,28 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 | 实时同步不生效 | `bitwarden_status` 看 `liveSync.mode`：`polling` 说明 WebSocket 没通（反代需放行 `Upgrade`/`Connection`，或服务器 `ENABLE_WEBSOCKET=false`） |
 | 想让模型立刻重试 | `bitwarden_status { "refresh": true }` 或 `bitwarden_sync` |
 
+## 兼容性
+
+插件声明了四条 **peer 依赖**，全部标记为 `optional`（由宿主提供，npm 不会去装）：
+
+| peer | 范围 | 说明 |
+| --- | --- | --- |
+| `@deepseek-ai/dsh-tools` | `^0.1.0-0 \|\| ^0.1.1-0 \|\| ^0.1.2-0 \|\| ^0.1.3-0 \|\| ^0.1.5-0 \|\| ^0.1.6-0 \|\| ^0.1.7-0 \|\| ^0.2.0-0` | `defineTool` |
+| `@deepseek-ai/dsh-typert-protocol` | 同上 | `Remote` / `TypertRemoteService` |
+| `@deepseek-ai/schemastery` | `^3.18.0 \|\| ^3.18.1-0` | `Config` schema |
+| `@deepseek-ai/cordis` | `>=4.0.1-rc.1 <5` | 宿主内核（插件由宿主注入，不自行安装） |
+
+**支持范围：DSH 0.1.0 线到 0.2.x**（含全部已发布的预发布构建），拒绝 `0.0.1-rc.*` 与 `0.3.0` 及以上。实际验证环境为 **DSH 0.2.0-rc.1 / `@deepseek-ai/dsh-tools` 0.2.0-rc.2**。
+
+> ⚠️ **为什么范围要写成这样**：npm 的预发布规则是「只有范围里*某个*比较符与该版本的 `major.minor.patch` 元组完全一致、且自身带预发布标签时，该预发布版本才被放行」。而 DSH 发布到 npm 的构建**全部带预发布标签**，所以看似合理的 `>=0.1.0-rc.1 <0.3.0-0` 实际只会放行 30 个已发布 `dsh-tools` 构建中的 5 个——包括把用户自己的运行时挡在外面，`npm install` 直接 `ERESOLVE`。宿主的加载闸门用的是 `{ includePrerelease: true }`，因此这个问题**在加载时不会暴露**，只在 npm 安装路径上炸。
+>
+> `test/peer-ranges.test.mjs` 会拿 `npm view <pkg> versions` 的版本清单逐个核对四条范围：对旧范围报 13 处失败，对当前范围全绿。换 harness 版本后请同步更新该文件里的清单。
+
 ## 安装
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.3   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.4   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -118,18 +135,21 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 七套离线测试（共 221 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 252 项）
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
+| `test/peer-ranges.test.mjs`（31） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
 | `test/mock-e2e.test.mjs`（38） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
 | `test/host-entry.test.mjs`（21） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
-| `test/gateway-flow.test.mjs`（30） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 |
+| `test/gateway-flow.test.mjs`（35） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（63） | 条目面板 + 徽标手动同步 + 重开缓存（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（72） | 条目面板 + 徽标手动同步 + 重开缓存（react-test-renderer + RPC 桩） |
+
+另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 
 mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
 
