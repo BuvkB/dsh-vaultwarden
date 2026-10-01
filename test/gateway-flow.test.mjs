@@ -206,6 +206,15 @@ async function main() {
     const listed = await gateway.list('', 50)
     check('the signed-in session lists entries', listed?.items?.length === 4, String(listed?.items?.length))
 
+    // Paging: the panel reads a small first page and walks forward with an
+    // offset; the gateway has to pass it through untouched.
+    const paged = await gateway.list('', 2, 1)
+    check(
+      'list walks the ranked entries with an offset',
+      paged?.items?.length === 2 && paged?.offset === 1 && paged?.matched === 4 && paged?.hasMore === true,
+      JSON.stringify({ offset: paged?.offset, items: paged?.items?.length, matched: paged?.matched, hasMore: paged?.hasMore }),
+    )
+
     // The panel's "back to settings" path must drop the session so the next
     // visit starts from the credential form.
     await gateway.reset()

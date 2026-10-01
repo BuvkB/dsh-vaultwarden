@@ -1,6 +1,6 @@
 # 前端设计说明（dsh-vaultwarden 浏览器半边）
 
-> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（85 项，含 localStorage 快照、`vw/boot` 打桩与旧宿主回退）。
+> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（129 项，含 localStorage 快照、`vw/boot` 打桩、旧宿主拒绝分页参数回退整表并被记住、满额截断诚实提示、列表分页与分页游标校准）。
 > 设计基线：与宿主设置页同水准；明暗双主题；仅 `--dsw-alias-*` 令牌；可访问性达标。
 
 ## 1. 一个界面，一个槽位
@@ -93,7 +93,7 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 1. 同步绘制：`openCache`（同页）→ localStorage 快照（重载后）。有就立刻 `ready`，没有才 `loading`。
 2. 一次 `vw/boot`：`{ config, resumed, session }`。Host 侧 `resumeSession()` 只读盘会话 + 必要时刷新 refresh token，**从不发起登录**（否则两步验证账号每次开面板都被拦）。
 3. 身份校验：快照的 `serverUrl + email` 与 `boot.config` 不一致 → 丢快照回到 `loading`；未配置 → 清快照进引导；`resumed: false` → 清快照进登录表单。
-4. 后台刷新：`vw/list` 与 `vw/status` **并行**发出，成功后回写两级缓存。
+4. 后台刷新：`vw/list` 与 `vw/status` **并行**发出，成功后回写两级缓存。列表按 `PAGE_SIZE = 50` 分页，向下滚动自动续读下一页；滑得比加载快时，尾部才出现「还有 N 条」按钮兜底。宿主拒绝分页参数时回退整表读取（上限 200），被上限截断时仍保留按钮。
 
 **为什么要这种顺序**：凭据列表只含摘要（名称/类型/用户名/URI/目录/徽标），没有密码与 TOTP 明文，可以安全驻留 localStorage；
 快照按「服务器 + 邮箱」绑定，且在宿主报告登出时立即删除。宿主侧同时把「开一次面板」从两次串行 RPC 降为一次，列表与状态并行，
@@ -101,6 +101,6 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 
 ## 6. 自验
 
-- `node test/client-card.test.mjs`：85 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**）。
+- `node test/client-card.test.mjs`：129 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**、**宿主拒绝 `vw/boot` 时报错而不误判旧宿主**、**列表分页：首屏 50 行、滚动续读、滑快出按钮、旧宿主拒绝分页参数后回退整表、页读失败保留列表、无布局度量不发请求、窗口漂移按宿主端点续读不重不漏、废弃列表迟到页被丢弃、满 200 上限截断改诚实提示且不再重试、拒绝分页的宿主下次打开直接整表**）。
 - 主题合规：全部颜色经 `var(--vw-*, var(--dsw-alias-*, #fallback))`，无 var() fallback 之外的硬编码色值；无 opacity 压暗文字；`state-*` 不用于正文。
 - 待办：安装进 profile 后做明暗双主题截图核对（见项目任务清单）。

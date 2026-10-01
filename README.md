@@ -136,19 +136,19 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 287 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 335 项）
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
 | `test/peer-ranges.test.mjs`（31） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
-| `test/mock-e2e.test.mjs`（38） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
+| `test/mock-e2e.test.mjs`（41） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
-| `test/gateway-flow.test.mjs`（51） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
+| `test/gateway-flow.test.mjs`（52） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（85） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ 旧宿主回退（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（129） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 
@@ -186,6 +186,8 @@ access token 过期了 → 用 refresh token 换一张新的。**全程不会自
 宿主侧同样做了减法：开面板改为一次 `boot` RPC（配置 + 会话 + 是否恢复），列表与状态两个请求并行发出；
 插件激活时还会在后台预热会话与解密缓存，重启 dsh 后第一次开面板也不用等全量同步。
 实测（mock 服务端）：一次登录 + 两次「重启」后开面板，**0 次密码授权、0 次两步验证、0 次 refresh**，列表 4–11 ms 返回。
+列表也改为渐进加载：首屏一次只取 50 条（`PAGE_SIZE`），向下滚动自动续读下一页；只有滑得比加载快时，尾部才出现「还有 N 条，点击继续显示」按钮兜底。宿主不接受分页参数（descriptor 未声明 `offset`，网关直接拒绝）时自动回退为整表读取，上限 200 与旧版一致，且这次拒绝会被记住——下次打开直接整表读取。整表读取被上限截断时不再给出点了没有反应的按钮，而是就地提示「本机只同步到 200/总数 条，其余请在 Bitwarden 网页端查看」。续读位置以宿主报告的窗口为准：某页比请求的偏移晚到（上游新增使窗口漂移）时按宿主报告的端点续读，重复行去重后不会漏行。
+
 ### 通行密钥（passkey / WebAuthn）不支持
 
 Vaultwarden 的通行密钥是一种 **2FA 方式**，但它必须由**浏览器调用 `navigator.credentials` 并配合认证器上的用户手势**（指纹/面容/PIN）才能完成——这是 WebAuthn 防自动化的核心设计。插件运行在无头 Node 进程中，**没有浏览器和认证器，物理上无法完成这个仪式**，因此不支持，未来也不会支持。
