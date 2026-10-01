@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] — 2026-10-01
+
+### 新增
+
+- 插件列表显示彩色图标：双层盾牌（紫 #6C4DF6 + 蓝 #2E6BE6）配白色镂空钥匙孔，与官方插件同一套 artwork 规范（包根 icon.svg + package.json icon 字段）。
+- 设置页「凭证据库」一行换成插件自己的盾牌图标，不再用宿主默认齿轮；图标随行内文字流式排布，桌面列与移动 tab 条都不错位、不夺位。
+- 设置页图标跟随行文字颜色，明暗双主题无需额外处理。
+
+### 测试
+
+- Host 入口测试新增插件列表图标契约断言（27 项，原 23）。
+- 客户端组件测试覆盖设置行盾牌图标（85 项，原 83）。
+- 全套测试 287 项，8 个文件全部通过。
+
 ## [0.2.5] — 2026-10-01
 
 ### 新增
