@@ -350,7 +350,16 @@ export async function startMockServer(options = {}) {
   if (!fixtures) return null
   const { kdf, masterPasswordHash, encryptedUserKey, syncPayload, apiClientId, apiClientSecret } = fixtures
 
-  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [], twoFactorChallenges: 0, twoFactorAccepted: 0 }
+  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [], twoFactorChallenges: 0, twoFactorAccepted: 0, revisionChecks: 0 }
+  // The account revision the vault cache probes. Real Vaultwarden bumps
+  // `users.updated_at` whenever a cipher or folder is written, so the mutations
+  // below move it too — that is what makes the probe worth trusting.
+  let revision = Date.parse('2026-01-01T00:00:00.000Z')
+  let revisionFails = false
+  const bumpRevision = () => {
+    revision = Math.max(Date.now(), revision + 1)
+    return revision
+  }
   const tokens = new Map()
   const hubSockets = new Set()
   const hubStats = { connections: 0, messages: 0, notifications: 0 }
@@ -491,6 +500,16 @@ export async function startMockServer(options = {}) {
         return send(200, syncPayload.profile)
       }
 
+      // A cold start asks for the account revision first: 13 bytes instead of
+      // the whole vault.
+      if (req.url.startsWith('/api/accounts/revision-date')) {
+        const auth = req.headers.authorization ?? ''
+        if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
+        stats.revisionChecks++
+        if (revisionFails) return send(500, { message: 'revision unavailable' })
+        return send(200, revision)
+      }
+
       if (req.url.startsWith('/api/sync')) {
         const auth = req.headers.authorization ?? ''
         if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
@@ -513,6 +532,7 @@ export async function startMockServer(options = {}) {
             revisionDate: new Date().toISOString(),
           }
           ciphers.push(created)
+          bumpRevision()
           stats.mutations.push('create')
           return send(200, created)
         }
@@ -527,22 +547,26 @@ export async function startMockServer(options = {}) {
             // stale fields encrypted under the previous per-item key.
             const updated = { ...JSON.parse(body || '{}'), id, revisionDate: new Date().toISOString() }
             ciphers[index] = updated
+            bumpRevision()
             stats.mutations.push('update')
             return send(200, updated)
           }
           if (req.method === 'POST' && action === '/delete') {
             ciphers[index] = { ...ciphers[index], deletedDate: new Date().toISOString() }
+            bumpRevision()
             stats.mutations.push('delete')
             return send(200, ciphers[index])
           }
           if (req.method === 'PUT' && action === '/restore') {
             const { deletedDate, ...rest } = ciphers[index]
             ciphers[index] = { ...rest, revisionDate: new Date().toISOString() }
+            bumpRevision()
             stats.mutations.push('restore')
             return send(200, ciphers[index])
           }
           if (req.method === 'DELETE' && !action) {
             ciphers.splice(index, 1)
+            bumpRevision()
             stats.mutations.push('purge')
             return send(200, {})
           }
@@ -642,6 +666,14 @@ export async function startMockServer(options = {}) {
     port,
     stats,
     hubStats,
+    /** The account revision the mock currently reports. */
+    revision: () => revision,
+    /** Move the account revision the way a real write would. */
+    bumpRevision,
+    /** Make the revision endpoint fail, to exercise the cache's fallback. */
+    failRevision: (flag = true) => {
+      revisionFails = Boolean(flag)
+    },
     fixtures,
     /** Push a Bitwarden NotificationType to every connected hub client. */
     notify: (type = 1, extra = {}) => {

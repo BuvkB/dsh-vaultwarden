@@ -93,6 +93,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== live sync test (WebSocket notifications) ==="
   node test/live-sync.test.mjs
 
+  # The on-disk vault cache: gzip envelope, 0600 atomic write, account checks,
+  # the 7-day trust window, and the revision-date fast path that lets a warm
+  # start skip the download entirely.
+  echo "=== vault cache test (revision probe fast path) ==="
+  node test/cache-store.test.mjs
+
   echo "=== cipher write-back test ==="
   node test/mutations.test.mjs
 

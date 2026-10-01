@@ -4,6 +4,22 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-10-02
+
+### 新增
+
+- 密文落盘缓存：每次成功同步后，把服务器**原样返回的密文**（不是明文）gzip 后写到 `~/.dsh/data/dsh-vaultwarden/vault-cache.json.gz`（权限 `0600`，先写临时文件再原子改名）。下次冷启动先读这份缓存，列表立刻出来，不必等整份保险库下载完。
+- 账号修订号探针：出完缓存后向服务器问一次 `GET /api/accounts/revision-date`（响应只有 13 字节）。**修订号没变就完全不下载**（省掉一次约 660 KB 的 `/api/sync`）；变了才在后台全量同步一次并刷新缓存，界面先显示旧数据、随后无缝换成新的。
+- 新设置项 `localCache`（默认开启）：关掉则每次启动都重新全量下载，行为与 0.2.7 一致；登出、切换账号、关闭该开关都会立即删掉缓存文件。
+- 缓存信任上限：缓存超过 **7 天**未更新时，即使探针说没变也强制全量同步一次（兜住上游可能漏推修订号的边缘路径）；探针报错、缓存损坏、解密失败一律退回全量下载。
+- 状态报告新增 `cached` 与 `cache` 两个字段（是否来自缓存、缓存开关/文件/写入时间/记录的修订号），`syncedAt` 在缓存命中时报告的是缓存写入时间。
+
+### 测试
+
+- 新增第十套离线测试 `test/cache-store.test.mjs`（61 项）：缓存读写与权限、账号/版本/损坏数据的拒绝、7 天信任窗口边界、以及 VaultClient 的完整路径——冷启动写缓存、热启动跳过下载、修订号变化后台补一次、探针失败保留缓存但不再授权快路径、超 7 天强制全量、换账号与登出清文件、关闭 `localCache` 不落文件也不发探针。
+- mock 服务端实现 `/api/accounts/revision-date` 路由，并提供 `revision()` / `bumpRevision()` / `failRevision()` 三个测试挂钩。
+- 十套离线测试共 396 项全部通过（未安装官方 `bw` CLI 时 `cli-interop` 自跳过）。
+
 ## [0.2.7] — 2026-10-01
 
 ### 新增
