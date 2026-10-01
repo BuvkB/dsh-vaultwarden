@@ -113,9 +113,26 @@ function makeRpc(overrides = {}) {
       if (route !== undefined) return route(payload?.args ?? {})
       if (method === 'status') return { ok: true, value: STATUS_REPORT }
       if (method === 'list') {
-        const query = String(payload?.args?.query ?? '')
-        const items = query ? ITEMS.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : ITEMS
-        return { ok: true, value: { query, matched: items.length, returned: items.length, vaultItems: ITEMS.length, items } }
+        const args = payload?.args ?? {}
+        const query = String(args.query ?? '')
+        const matchedItems = query ? ITEMS.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : ITEMS
+        // Honour limit/offset the way the host does, so the paging scenarios
+        // below exercise the real read contract rather than a full dump.
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = matchedItems.slice(offset, offset + limit)
+        return {
+          ok: true,
+          value: {
+            query,
+            matched: matchedItems.length,
+            returned: page.length,
+            offset,
+            hasMore: offset + page.length < matchedItems.length,
+            vaultItems: ITEMS.length,
+            items: page,
+          },
+        }
       }
       if (method === 'reveal') {
         const args = payload?.args ?? {}
@@ -162,7 +179,12 @@ async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
   // The panel keeps a module-level cache across unmounts; each test starts from
   // a clean slate so one scenario cannot leak into the next. Tests that
   // deliberately exercise the cache pass { keepCache: true }.
-  if (!options.keepCache) mod.__resetOpenCache?.()
+  if (!options.keepCache) {
+    mod.__resetOpenCache?.()
+    // The "this host cannot page" memory is module-scope too: one scenario's
+    // refusing host must not decide how the next scenario reads its vault.
+    mod.__resetPagingRefusal?.()
+  }
   const registrations = []
   const ctx = {
     effect: (fn) => fn(),
@@ -193,6 +215,35 @@ async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
     await sleep(50)
   })
   return { renderer, registration, t: (key) => dictionaries.zh[key] ?? key }
+}
+
+/** A 130-entry vault: large enough that paging must kick in twice. */
+const BIG_ITEMS = Array.from({ length: 130 }, (_, index) => ({
+  id: `big-${index + 1}`,
+  name: `条目 ${String(index + 1).padStart(3, '0')}`,
+  type: 'login',
+  username: `user${index + 1}@example.com`,
+  uris: [],
+  folder: null,
+  collections: [],
+  hasTotp: false,
+  hasNotes: false,
+  customFields: [],
+  favorite: false,
+}))
+const BIG_COUNT = BIG_ITEMS.length
+
+/** "The reader is at the bottom": remaining distance 0. */
+const atBottom = { scrollTop: 700, scrollHeight: 700, clientHeight: 0 }
+/** A bare object without DOM metrics: the bottom check must not trust it. */
+const noElement = {}
+
+const isRow = (node) => node?.props?.role === 'option'
+const optionRows = (renderer) => renderer.root.findAll((node) => isRow(node))
+const flush = async (ms = 60) => {
+  await act(async () => {
+    await sleep(ms)
+  })
 }
 
 async function main() {
@@ -345,6 +396,391 @@ async function main() {
   await act(async () => {
     renderer.unmount()
   })
+
+  // ── progressive paging: a small first page, then the rest on scroll ───────
+  // The reported slowness: one read carried the whole vault across the RPC
+  // boundary before a single row could be drawn. The panel now reads a small
+  // first page, appends the next as the reader nears the bottom, and keeps the
+  // count honest from the host's own total.
+  {
+    const bigDictionaries = {}
+    const bigRpc = makeRpc({
+      list: (args) => {
+        const query = String(args.query ?? '')
+        const matched = query ? BIG_ITEMS.filter((item) => item.name.includes(query)) : BIG_ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = matched.slice(offset, offset + limit)
+        return { ok: true, value: { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page } }
+      },
+    })
+    const panel = await mountPanel(mod, bigDictionaries, bigRpc)
+    const listCalls = () => bigRpc.calls.filter((call) => call.method === 'list')
+    check('the first read asks for one small page', listCalls()[0]?.args.limit === 50 && listCalls()[0]?.args.offset === undefined, JSON.stringify(listCalls()[0]?.args))
+    check('a large vault paints only the first page', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
+    check('the total still counts the whole vault', JSON.stringify(panel.renderer.toJSON()).includes(`共 ${BIG_COUNT} 条`))
+
+    // Reaching the bottom asks for the next page and appends it.
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    const callsAfterScroll = listCalls()
+    check('reaching the bottom reads the next page', callsAfterScroll.length === 2 && callsAfterScroll[1].args.limit === 50 && callsAfterScroll[1].args.offset === 50, JSON.stringify(callsAfterScroll[1]?.args))
+    check('the next page is appended to the rows', optionRows(panel.renderer).length === 100, `rows=${optionRows(panel.renderer).length}`)
+    check('the appended page does not ask for a page of its own', listCalls().length === 2, String(listCalls().length))
+
+    // The end of the list is quiet: no control, no extra read.
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    const tail = JSON.stringify(panel.renderer.toJSON())
+    check('the third page completes the list', optionRows(panel.renderer).length === BIG_COUNT, `rows=${optionRows(panel.renderer).length}`)
+    check('the completed list offers no more control', !tail.includes('还有') && !tail.includes('正在加载'), tail.slice(-160))
+    check('no read is issued once the list is complete', listCalls().length === 3, String(listCalls().length))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── outrun: a fast scroll gets the explicit control ───────────────────────
+  // A flick through a large vault must not stack reads: the in-flight page is
+  // awaited, and the reader gets the "还有 N 条" control instead.
+  {
+    let releasePage = null
+    let listCallCount = 0
+    const slowRpc = makeRpc({
+      list: (args) => {
+        listCallCount += 1
+        const query = String(args.query ?? '')
+        const matched = query ? BIG_ITEMS.filter((item) => item.name.includes(query)) : BIG_ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = matched.slice(offset, offset + limit)
+        const payload = { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page }
+        // The second page answers only when the test says so.
+        if (listCallCount === 2) {
+          return new Promise((resolve) => {
+            releasePage = () => resolve({ ok: true, value: payload })
+          })
+        }
+        return { ok: true, value: payload }
+      },
+    })
+    const panel = await mountPanel(mod, {}, slowRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    check('the outrun fixture starts on the first page', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
+
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await act(async () => {
+      await sleep(20)
+    })
+    // The page is still in flight; another bottom hit must not queue a read.
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush(20)
+    check('a scroll during an in-flight page does not stack a read', listCallCount === 2, String(listCallCount))
+    const waitingText = JSON.stringify(panel.renderer.toJSON())
+    check('the outrun scroll reveals the explicit control', waitingText.includes('还有 80 条'), waitingText.slice(-160))
+
+    await act(async () => {
+      releasePage?.()
+    })
+    await flush()
+    check('the in-flight page lands', optionRows(panel.renderer).length === 100, `rows=${optionRows(panel.renderer).length}`)
+    // The control stays: it was raised before the page landed, and a reader
+    // who kept scrolling is still at the bottom.
+    check('the control stays for a reader who outran the page', JSON.stringify(panel.renderer.toJSON()).includes('还有 30 条'))
+    const moreButton = () => panel.renderer.root.findAllByType('button').find((node) => node.props['data-load-more'] === '')
+    await act(async () => {
+      moreButton().props.onClick()
+    })
+    await flush()
+    check('the control reads the rest of the list', optionRows(panel.renderer).length === BIG_COUNT, `rows=${optionRows(panel.renderer).length}`)
+    check('the control disappears at the end', !JSON.stringify(panel.renderer.toJSON()).includes('还有'), '')
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a host that predates paging refuses the extra field ───────────────────
+  // A host from before paging declares `list(query, limit)` and nothing else.
+  // The gateway matches the descriptor exactly, so a page read carrying
+  // `offset` is rejected with `gateway/arguments-invalid` — it is never
+  // silently ignored. The panel must treat that as "this host cannot page"
+  // and read the rest of the vault in one call.
+  {
+    const legacyRpc = makeRpc({
+      list: (args) => {
+        if (args.offset !== undefined) {
+          return { ok: false, error: { code: 'gateway/arguments-invalid', message: 'args fields do not match the descriptor: unexpected "offset"' } }
+        }
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = BIG_ITEMS.slice(0, limit)
+        return { ok: true, value: { query: '', matched: BIG_COUNT, returned: page.length, vaultItems: BIG_COUNT, items: page } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, legacyRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('a refusing host still gets the whole vault', optionRows(panel.renderer).length === BIG_COUNT, `rows=${optionRows(panel.renderer).length}`)
+    const legacyCalls = legacyRpc.calls.filter((call) => call.method === 'list')
+    check('the page read is rejected, then the full read answers', legacyCalls.length === 3 && legacyCalls[0].args.offset === undefined && legacyCalls[1].args.offset === 50 && legacyCalls[2].args.limit === 200, JSON.stringify(legacyCalls.map((call) => call.args)))
+    // The full read answers for the whole query, so the list is complete:
+    // further scrolling must not start asking a paging-less host for pages.
+    const afterFallback = legacyCalls.length
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('the fallback marks the list complete', legacyRpc.calls.filter((call) => call.method === 'list').length === afterFallback, String(legacyRpc.calls.filter((call) => call.method === 'list').length))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a host that caps a full read cannot hide the rows it left behind ──────
+  // `limit` is a ceiling, not a promise: a host clamps every read to 200
+  // entries, so a 300-entry vault comes back short of its own `matched` count.
+  // Such a host cannot page either, so the rows behind the ceiling are out of
+  // reach from here: the list must admit the shortfall in place (a notice, not
+  // a control that spins), and the next open must skip the page read the host
+  // has already refused.
+  {
+    const HUGE_ITEMS = Array.from({ length: 300 }, (_, index) => ({
+      ...BIG_ITEMS[0],
+      id: `huge-${index + 1}`,
+      name: `大库条目 ${String(index + 1).padStart(3, '0')}`,
+      username: `huge${index + 1}@example.com`,
+    }))
+    const cappedRpc = makeRpc({
+      list: (args) => {
+        // The host the panel actually talks to here still refuses `offset`…
+        if (args.offset !== undefined) {
+          return { ok: false, error: { code: 'gateway/arguments-invalid', message: 'args fields do not match the descriptor: unexpected "offset"' } }
+        }
+        // …and serves at most 200 rows per call, however large the vault is,
+        // so the first page is 50 rows and the one full read is 200 of 300.
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = HUGE_ITEMS.slice(0, limit)
+        return { ok: true, value: { query: '', matched: HUGE_ITEMS.length, returned: page.length, vaultItems: HUGE_ITEMS.length, items: page } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, cappedRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('a capped host shows every row it will serve', optionRows(panel.renderer).length === 200, `rows=${optionRows(panel.renderer).length}`)
+    check('a capped list admits the rows it left behind', JSON.stringify(panel.renderer.toJSON()).includes('本机只同步到 200/300 条，其余 100 条请在 Bitwarden 网页端查看'), JSON.stringify(panel.renderer.toJSON()).slice(-220))
+    const cappedMoreButton = () => panel.renderer.root.findAllByType('button').find((node) => node.props['data-load-more'] === '')
+    check('a capped list does not offer a control that cannot work', !cappedMoreButton() && !JSON.stringify(panel.renderer.toJSON()).includes('点击继续显示'), '')
+    // The ceiling is known now: another scroll must not send the host a page
+    // read it has already refused twice, nor stack a second copy of the list.
+    const callsAtCeiling = cappedRpc.calls.filter((call) => call.method === 'list').length
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('a capped list is replaced, not duplicated', optionRows(panel.renderer).length === 200, `rows=${optionRows(panel.renderer).length}`)
+    check('a host at its ceiling is not asked again', cappedRpc.calls.filter((call) => call.method === 'list').length === callsAtCeiling, String(cappedRpc.calls.filter((call) => call.method === 'list').length))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+    // The refusal is remembered for the session: the next open skips the page
+    // this host cannot serve and asks straight for the whole vault.
+    // `keepCache`: a real reopen keeps the module's own memory (the flag and
+    // the snapshot) — only the renderer is rebuilt.
+    const reopened = await mountPanel(mod, {}, cappedRpc, { keepCache: true })
+    const reopenedCalls = cappedRpc.calls.filter((call) => call.method === 'list')
+    check('the next open skips the page this host cannot serve', reopenedCalls.at(-1)?.args.limit === 200 && reopenedCalls.at(-1)?.args.offset === undefined, JSON.stringify(reopenedCalls.at(-1)?.args))
+    check('the reopened list paints what the host will serve', optionRows(reopened.renderer).length === 200, `rows=${optionRows(reopened.renderer).length}`)
+    check('the reopened list keeps the notice', JSON.stringify(reopened.renderer.toJSON()).includes('本机只同步到 200/300 条'), JSON.stringify(reopened.renderer.toJSON()).slice(-220))
+    await act(async () => {
+      reopened.renderer.unmount()
+    })
+  }
+
+  // ── a page read that fails leaves the rows and offers the control ─────────
+  {
+    let failingCallCount = 0
+    const flakyRpc = makeRpc({
+      list: (args) => {
+        failingCallCount += 1
+        const query = String(args.query ?? '')
+        const matched = query ? BIG_ITEMS.filter((item) => item.name.includes(query)) : BIG_ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        if (failingCallCount === 2) return { ok: false, error: { code: 'network_error', message: '网络中断' } }
+        const page = matched.slice(offset, offset + limit)
+        return { ok: true, value: { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, flakyRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('a failed page keeps the rows on screen', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
+    check('a failed page leaves an explicit control', JSON.stringify(panel.renderer.toJSON()).includes('还有 80 条'))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a scroll event without layout metrics is a no-op ──────────────────────
+  // "I cannot tell where this container is" must not be read as "at the
+  // bottom": that would let a measurement-less container drain the whole vault
+  // one page at a time. Nothing happens until a measurable scroll arrives.
+  {
+    const bigPage = (args) => {
+      const query = String(args.query ?? '')
+      const matched = query ? BIG_ITEMS.filter((item) => item.name.includes(query)) : BIG_ITEMS
+      const offset = Math.max(0, Number(args.offset) || 0)
+      const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+      const page = matched.slice(offset, offset + limit)
+      return { ok: true, value: { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page } }
+    }
+    const metricRpc = makeRpc({ list: bigPage })
+    const panel = await mountPanel(mod, {}, metricRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: noElement })
+    })
+    await flush()
+    const metricCalls = metricRpc.calls.filter((call) => call.method === 'list').length
+    check('a metric-less scroll reads nothing and leaves the panel mounted', optionRows(panel.renderer).length === 50 && metricCalls === 1 && Boolean(scroller()), `rows=${optionRows(panel.renderer).length} calls=${metricCalls}`)
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a page served from where the host really is, not where it was ─────────
+  // Rows arriving upstream between two reads shift every row the panel knows
+  // further down: a page served from the offset the panel asked for carries
+  // ids it has already seen. The repeats must not be drawn twice, and — since
+  // the host reports the window it served — the next read must continue from
+  // that window's end, not from a count of rows on screen. A count would say
+  // 95 while the host's own edge is at 100; following the count would leave
+  // the drift permanent and the tail of the vault unreachable.
+  {
+    const DRIFT = 5
+    let listCallCount = 0
+    const driftingRpc = makeRpc({
+      list: (args) => {
+        listCallCount += 1
+        const offset = Math.max(0, Number(args.offset) || 0)
+        // After the first page, five rows have arrived upstream, so every id
+        // the panel knows sits five positions further down.
+        const shift = listCallCount === 1 ? 0 : DRIFT
+        const from = Math.max(0, offset - shift)
+        const items = BIG_ITEMS.slice(from, from + 50)
+        const end = offset + items.length
+        return { ok: true, value: { query: '', matched: BIG_COUNT, returned: items.length, offset, hasMore: end < BIG_COUNT, vaultItems: BIG_COUNT, items } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, driftingRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    const listCalls = () => driftingRpc.calls.filter((call) => call.method === 'list')
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('rows the panel already had are not drawn twice', optionRows(panel.renderer).length === 95, `rows=${optionRows(panel.renderer).length}`)
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    // Page two was served from 50 and carried 50 rows, so the host's answer
+    // ends at 100: that is where page three must start.
+    check('the next read starts where the host said its page ended', listCalls()[2]?.args.offset === 100, JSON.stringify(listCalls().map((call) => call.args)))
+    check('drift does not trigger a full re-read', !listCalls().some((call) => call.args.limit === 200), JSON.stringify(listCalls().map((call) => call.args)))
+    check('the drifted list still completes', optionRows(panel.renderer).length === BIG_COUNT, `rows=${optionRows(panel.renderer).length}`)
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    check('a completed drifted list stops reading', listCalls().length === 3, String(listCalls().length))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a page from an abandoned list cannot leak into the new one ────────────
+  // Typing while a page is on its way starts a fresh read for the new query.
+  // The page that lands late belongs to the list that no longer exists: it
+  // must be dropped, and it must not move the paging cursor of the new list.
+  {
+    let releaseOldPage = null
+    let listCallCount = 0
+    const raceRpc = makeRpc({
+      list: (args) => {
+        listCallCount += 1
+        const query = String(args.query ?? '')
+        const matched = query ? BIG_ITEMS.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : BIG_ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const page = matched.slice(offset, offset + 50)
+        const payload = { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page }
+        // The second read is the page a fast typist outruns: it answers only
+        // when the test says so.
+        if (listCallCount === 2) {
+          return new Promise((resolve) => {
+            releaseOldPage = () => resolve({ ok: true, value: payload })
+          })
+        }
+        return { ok: true, value: payload }
+      },
+    })
+    const panel = await mountPanel(mod, {}, raceRpc)
+    const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    const searchBox = () => panel.renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    // The next page goes in flight...
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await act(async () => {
+      await sleep(20)
+    })
+    check('the outrun page is in flight', typeof releaseOldPage === 'function')
+    // ...and the reader types a new query before it lands.
+    await act(async () => {
+      searchBox().props.onChange({ target: { value: 'user' } })
+    })
+    await act(async () => {
+      await sleep(350)
+    })
+    check('the new query paints its own first page', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
+    // The abandoned page lands late.
+    await act(async () => {
+      releaseOldPage?.()
+    })
+    await flush()
+    check('a page from an abandoned list is dropped', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
+    check('the abandoned page leaks no rows', !JSON.stringify(panel.renderer.toJSON()).includes('条目 051'), '')
+    // The cursor of the new list is where its own first page ended (50), not
+    // wherever the abandoned page was reading.
+    await act(async () => {
+      scroller().props.onScroll({ currentTarget: atBottom })
+    })
+    await flush()
+    const pageCalls = raceRpc.calls.filter((call) => call.method === 'list')
+    check('the search read carries the new query', pageCalls[2]?.args.query === 'user', JSON.stringify(pageCalls[2]?.args))
+    check('the new list keeps reading from its own cursor', pageCalls[3]?.args.offset === 50, JSON.stringify(pageCalls.map((call) => call.args)))
+    check('the new list continues to its second page', optionRows(panel.renderer).length === 100, `rows=${optionRows(panel.renderer).length}`)
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
 
   // ── not configured → guided setup form ────────────────────────────────────
   // The panel chooses the setup form from the configuration state (not from an
@@ -522,13 +958,16 @@ async function main() {
   // unknown method would otherwise render "尚未配置完成" on a fully configured
   // vault. The old config + session pair is the fallback.
   {
-    const unknownMethod = { ok: false, error: { code: 'unknown_method', message: 'vw/boot is not a registered remote method' } }
+    // The code the gateway really raises for a host that has no `vw/boot`
+    // (dsh-api-gateway: "no active Remote method exports this endpoint").
+    const unknownMethod = { ok: false, error: { code: 'gateway/invocation-unavailable', message: 'no active Remote method exports this endpoint' } }
     const rpc = makeRpc({
       boot: () => unknownMethod,
       config: () => ({ ok: true, value: CONFIG_VALUE }),
       session: () => ({ ok: true, value: AUTHED_SESSION }),
-      // The list payload the default route builds; spell it out so this
-      // scenario does not depend on the default list filter.
+      // The list payload the default route builds; spelled out so this
+      // scenario does not depend on the default list filter. No `hasMore`,
+      // like a host that predates paging.
       list: () => ({ ok: true, value: { query: '', matched: ITEM_COUNT, returned: ITEM_COUNT, vaultItems: ITEM_COUNT, items: ITEMS } }),
       status: () => ({ ok: true, value: STATUS_REPORT }),
     })
@@ -536,6 +975,23 @@ async function main() {
     const legacyText = JSON.stringify(panel.renderer.toJSON())
     check('a host without vw/boot still opens the list', legacyText.includes('实时同步') && !legacyText.includes('尚未配置完成'))
     check('a host without vw/boot is never asked to log in', rpc.calls.filter((call) => call.method === 'connect').length === 0)
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
+  // ── a host that HAS vw/boot and rejected it must not be read as an old one ─
+  // "Missing method" is the only failure a fallback may act on. A gateway that
+  // answered and refused (argument shape, permission, an error thrown inside
+  // boot) has to reach the screen, or a real failure would be hidden behind a
+  // silent fallback that changes what the panel shows.
+  {
+    const rejected = { ok: false, error: { code: 'gateway/arguments-invalid', message: 'args fields do not match the descriptor: unexpected "boot"' } }
+    const rpc = makeRpc({ boot: () => rejected })
+    const panel = await mountPanel(mod, {}, rpc)
+    const rejectedText = JSON.stringify(panel.renderer.toJSON())
+    check('a rejected vw/boot is reported, not read as an old host', rejectedText.includes('args fields do not match the descriptor'), rejectedText.slice(-220))
+    check('a rejected vw/boot never falls back to the pre-boot pair', rpc.calls.filter((call) => call.method === 'config' || call.method === 'session').length === 0)
     await act(async () => {
       panel.renderer.unmount()
     })

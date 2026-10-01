@@ -77,6 +77,22 @@ async function main() {
   const empty = JSON.parse(await client.find('nothing-here-xyz'))
   check('find reports an empty result set cleanly', empty.matched === 0 && empty.items.length === 0)
 
+  // 3b. paged reads: the panel's small first page and its continuation ---------
+  const page1 = await client.findEntries('', 2, 0)
+  check(
+    'a page reports its offset and that more follows',
+    page1.offset === 0 && page1.items.length === 2 && page1.matched === 4 && page1.hasMore === true,
+    JSON.stringify({ offset: page1.offset, items: page1.items.length, matched: page1.matched, hasMore: page1.hasMore }),
+  )
+  const page2 = await client.findEntries('', 2, 2)
+  check(
+    'the next page continues without overlap',
+    page2.offset === 2 && page2.items.length === 2 && page2.hasMore === false && page2.items.every((item) => !page1.items.some((first) => first.id === item.id)),
+    JSON.stringify(page2.items.map((item) => item.id)),
+  )
+  const beyond = await client.findEntries('', 2, 99)
+  check('an out-of-range offset comes back empty and complete', beyond.items.length === 0 && beyond.hasMore === false, JSON.stringify({ items: beyond.items.length, hasMore: beyond.hasMore }))
+
   // 4. get by id / name / field ----------------------------------------------
   const byId = JSON.parse(await client.get('cipher-github', 'all'))
   check('get by id returns the credential', byId.password === 'gh-p@ssw0rd-42' && byId.username === 'octocat@jindom.cc')

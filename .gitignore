@@ -5,3 +5,6 @@ npm-debug.log*
 
 # Local materials for the awesome-dsh-plugin submission (not part of the package)
 .pr/
+
+# Local icon preview rendered while designing the plugin icon (not part of the package)
+.icon-preview.png
