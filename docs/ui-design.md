@@ -1,6 +1,6 @@
 # 前端设计说明（dsh-vaultwarden 浏览器半边）
 
-> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（83 项，含 localStorage 快照、`vw/boot` 打桩与旧宿主回退）。
+> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（85 项，含 localStorage 快照、`vw/boot` 打桩与旧宿主回退）。
 > 设计基线：与宿主设置页同水准；明暗双主题；仅 `--dsw-alias-*` 令牌；可访问性达标。
 
 ## 1. 一个界面，一个槽位
@@ -14,6 +14,21 @@
 - `settings.section` 是 list 槽、`replaceRisk: none`、**有分配空间**，插件获得自己的设置页，不与任何第三方插件耦合（不依赖 dsh-better-sidebar 之类）。
 - 0.2.0 起配置表单由宿主按 `Config` schema 渲染，插件不再自绘卡片；旧的 `settingsScope` / `settings.plugin.item` 已被移除，继续用它们会导致前端整块不注册（曾实测踩到）。
 - 会话内表面（composer dock / 右栏 tab）都要求 session 作用域或依赖其他插件，v1 不做。
+
+## 1b. 图标规范
+
+| 位置 | 形态 | 来源 |
+|---|---|---|
+| 插件列表 / 插件市场 | 双层盾牌（紫 #6C4DF6 后盾 + 蓝 #2E6BE6 前盾）配白色镂空钥匙孔 | 包根 `icon.svg`（1024 画布，扁平色块 + 镂空），`package.json` `icon` 字段指向它，`files` 收录 |
+| 设置页导航行「凭证据库」 | 单色盾牌线稿（`currentColor` 跟随行文字色，明暗双主题自适应） | `lib/client.js` `VaultGlyph` |
+
+宿主 artwork 规范（实证自 dsh-context / dsh-im）：包根带 `icon.svg` + `package.json` 顶层 `"icon": "icon.svg"` + `files` 收录；
+插件管理器渲染 `pkg.meta.icon`（`@deepseek-ai/dsh-client-ui-plugin-manager`，卡片 36px / 列表行 30px，`PluginArtworkDefault` 兜底），
+官方风 = 鲜艳扁平的纯色形状组合（dsh-im = 交叠对话气泡 + 渐变，dsh-context = 六色拼贴），不是「线稿 + 彩色底框」。
+设置导航行没有插件图标槽（宿主只给五个内置 section 自己的图标，其余一律发默认齿轮），所以那一行的图标由标签自己画：
+`VaultNavLabel` 把盾牌线稿并进标签自身的 flex 流（`.vw-nav-label` 行向布局，桌面 gap 8px / 移动 tab 条 6px 由样式表断点给，
+不实测、不覆盖宿主槽位），同时把宿主齿轮 `display: none`——图标占的就是齿轮原来的位置，行文字与其余行对齐。
+样式表由 `VaultNavLabel` 挂载时 `ensureStyles()` 保证存在（设置 nav 是宿主弹层，可能早于面板首次渲染）。
 
 ## 2. 数据通道
 
@@ -86,6 +101,6 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 
 ## 6. 自验
 
-- `node test/client-card.test.mjs`：83 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**）。
+- `node test/client-card.test.mjs`：85 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**）。
 - 主题合规：全部颜色经 `var(--vw-*, var(--dsw-alias-*, #fallback))`，无 var() fallback 之外的硬编码色值；无 opacity 压暗文字；`state-*` 不用于正文。
 - 待办：安装进 profile 后做明暗双主题截图核对（见项目任务清单）。

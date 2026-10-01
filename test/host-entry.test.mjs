@@ -197,6 +197,18 @@ async function main() {
     return offenders.length === 0
   })())
 
+  // ── the plugin-list icon (host artwork contract) ───────────────────────────
+  // The plugin manager draws pkg.meta.icon, so the icon has to be declared in
+  // package.json, listed in files, and present as a real file.
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const iconSource = () => readFileSync(new URL('../icon.svg', import.meta.url), 'utf8')
+  check('package.json points at the plugin-list icon', manifest.icon === 'icon.svg', String(manifest.icon))
+  check('the icon ships inside the npm files list', (manifest.files ?? []).includes('icon.svg'), JSON.stringify(manifest.files))
+  check('the icon file is an SVG with the official square canvas', /^<svg[\s\S]+<\/svg>$/.test(iconSource().trim()) && iconSource().includes('viewBox="0 0 1024 1024"'))
+  check('the icon layers two vivid flat shields (host artwork style)', iconSource().includes('fill="#2E6BE6"') && iconSource().includes('fill="#6C4DF6"'))
+  check('the front shield carries the hollow white keyhole', /M512 208 C600 208 690 222 742 236/.test(iconSource()) && iconSource().includes('fill="#ffffff"'))
+  check('the keyhole is knocked out (ring and stem, legible at 30px)', /<circle cx="512" cy="452" r="52" fill="#ffffff"/.test(iconSource().replace(/\s+/g, ' ')) && iconSource().includes('M486 496 H538'))
+
   // ── degraded configuration must not throw ───────────────────────────────────
   const emptyCtx = { ...fakeCtx, tools: { register: () => () => {} }, systemPrompt: { section: () => () => {} } }
   let threw = null

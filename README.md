@@ -23,6 +23,7 @@
 | 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：9 个字段（服务器/邮箱/主密码/API 密钥/同步选项/权限档），密钥字段为只写 |
 | 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
 | 认证通道 | 面板经 `/api` connection RPC 取数（`vw/*` 命名空间）——**走操作者已认证会话**，插件不自建 HTTP 路由 |
+| 插件列表彩色图标 | 按宿主 artwork 规范提供包根 `icon.svg`（双层盾牌：紫 #6C4DF6 + 蓝 #2E6BE6，白色镂空钥匙孔）；设置页「凭证据库」一行同用盾牌线稿，替换宿主默认齿轮 |
 
 插件直连服务器 REST API（`/identity/accounts/prelogin`、`/identity/connect/token`、`/api/sync`、`/api/ciphers*`），
 **不依赖 `bw` CLI**；除可选的 `hash-wasm`（Argon2id KDF）外全部使用 Node 内置模块。
@@ -135,7 +136,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 279 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 287 项）
 ```
 
 | 套件 | 覆盖 |
@@ -144,10 +145,10 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测�
 | `test/mock-e2e.test.mjs`（38） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
-| `test/host-entry.test.mjs`（21） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束） |
+| `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
 | `test/gateway-flow.test.mjs`（51） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（83） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ 旧宿主回退（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（85） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ 旧宿主回退（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 

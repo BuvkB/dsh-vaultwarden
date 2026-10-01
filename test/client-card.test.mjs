@@ -210,7 +210,20 @@ async function main() {
   const rpc = makeRpc()
   const { renderer, registration, t } = await mountPanel(mod, dictionaries, rpc)
   check('registers the entry panel as a settings page', Boolean(registration) && registration.options.id === 'vaultwarden', JSON.stringify(registration?.options))
-  check('panel label comes from the dictionary', registration.options.label() === '凭据库')
+  {
+    // The host's settings nav hands every plugin section the generic gear and
+    // offers no icon slot, so the label itself carries the glyph: VaultNavLabel
+    // hides that gear and lets the glyph join its flex flow, keeping the row's
+    // rhythm in the desktop column and the mobile tab strip alike.
+    let labelRenderer = null
+    await act(async () => {
+      labelRenderer = create(registration.options.label())
+    })
+    const labelJson = JSON.stringify(labelRenderer.toJSON())
+    check('panel label comes from the dictionary', labelJson.includes('凭据库'), labelJson.slice(0, 120))
+    check('the settings label carries the vault glyph', labelJson.includes('vw-nav-glyph') && labelJson.includes('M8 1.7 13.8 3.7V8'), labelJson.slice(0, 120))
+    check('the settings label is marked for the gear replacement', labelJson.includes('vw-nav-label') && labelJson.includes('vw-nav-text'))
+  }
 
   // ── compact header (reported: the title and search box were noisy) ───────
   // The title stays short; Vaultwarden support rides alongside it in small
