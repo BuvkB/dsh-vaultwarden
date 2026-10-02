@@ -4,6 +4,18 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-10-02
+
+### 修复
+
+- 换令牌失败不再无差别删除会话：只有服务器**明确拒绝** refresh token（`invalid_grant` / 401）才清除盘上会话；断网、超时、429 限流、5xx 一律保留内存令牌与 `session.json`。此前任何一种失败都会删掉整份会话，于是一次网络抖动就导致下次打开必须重输主密码 + 验证码——这就是「重启一次输一次密码」的来源。
+- 后台换令牌失败改为向上抛错，不再掉进「用主密码重新登录」：两步验证账号不会因为一次网络错误被拖到验证码界面；网络恢复后下一次使用静默续上。
+- 新增会话丢失诊断：会话被服务器拒绝而清除时记录 `lastSessionLoss`（时间、原因、服务器消息），面板状态接口与 `bitwarden_status` 都会带上它，回答「为什么又让我输密码」。
+
+### 测试
+
+- 新增第十一套离线测试 `test/session-resilience.test.mjs`（22 项）：断网 / 429 / 5xx 下 `resumeSession()`、`boot()`、`ensureToken()` 均保留会话与 refresh token、不发密码授权；网络恢复后复用同一 refresh token 静默续上；服务端明确拒绝时才清盘，且之后仍可重新登录。
+
 ## [0.3.0] — 2026-10-02
 
 ### 新增
