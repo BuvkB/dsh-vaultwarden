@@ -118,6 +118,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== access mode tier test ==="
   node test/access-mode.test.mjs
 
+  # Session resilience: a failed token refresh may only cost the stored session
+  # when the *server* refused it. Offline, 429 and 5xx must keep it (and must
+  # never drag a two-factor account to the code prompt).
+  echo "=== session resilience test (failed refresh does not delete the session) ==="
+  node test/session-resilience.test.mjs
+
   # Cross-implementation check against the official Bitwarden CLI. It skips
   # itself (exit 0) when the CLI or openssl is unavailable.
   echo "=== official CLI interop test ==="

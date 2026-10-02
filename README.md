@@ -138,7 +138,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测试（共 335 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十一套离线测试（共 418 项）
 ```
 
 | 套件 | 覆盖 |
@@ -147,6 +147,8 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 八套离线测�
 | `test/mock-e2e.test.mjs`（41） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
+| `test/cache-store.test.mjs`（61） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
+| `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
 | `test/gateway-flow.test.mjs`（52） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
@@ -175,10 +177,15 @@ Vaultwarden 的两步验证是**两步**：先验证主密码，再提交动态�
 登录信息会**加密落盘**（`~/.dsh/data/dsh-vaultwarden/session.json`，`0600`，其中含 refresh token；access token 只有 1 小时寿命）。
 插件开面板（以及每次启动预热）时先**静默恢复**：读盘 → access token 还在 → 直接用；
 access token 过期了 → 用 refresh token 换一张新的。**全程不会自动登录，所以不会弹两步验证**。
-弹登录表单只剩两种情况：盘上真的没有会话（首次配置、登出过、或闲置超过 `sessionDays`），或 refresh token 也失效了。
+弹登录表单只剩三种情况：盘上真的没有会话（首次配置、登出过、或闲置超过 `sessionDays`）、
+refresh token 被服务器**明确拒绝**（换机改密等），或者磁盘上的会话文件损坏/版本不符。
 
 > 0.2.5 之前这里有两个 bug：access token 1 小时一过，面板就以为你被登出了；
 > 而「用同一套账号密码点验证并登录」会先把盘上会话删掉再登，逼着你重输密码+验证码。
+> 0.3.1 之前还有第三个：**换令牌时只要失败就删会话**——断网、429 限流、5xx 都算，
+> 于是一次网络抖动就丢掉整份会话，下次打开只能重输主密码+验证码。
+> 现在只有服务器明确拒绝（`invalid_grant` / 401）才删；网络类失败原样保留，网络一恢复就静默续上。
+> 若确实被拒绝，面板的状态接口会给出 `lastSessionLoss`，说明是哪次、为什么丢的。
 
 ### 秒开：先绘制，再请求
 
