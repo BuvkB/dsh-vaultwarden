@@ -138,13 +138,14 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十一套离线测试（共 418 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十二套离线测试（共 444 项）
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
 | `test/peer-ranges.test.mjs`（31） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
 | `test/mock-e2e.test.mjs`（41） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
+| `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
 | `test/cache-store.test.mjs`（61） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
@@ -152,7 +153,7 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十一套离线�
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
 | `test/gateway-flow.test.mjs`（52） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
 | `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（129） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（142） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 

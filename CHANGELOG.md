@@ -4,6 +4,21 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-10-05
+
+### 修复
+
+- **Argon2id 账号永远登录失败（P0）**：`kdfMemory` 的单位是 MiB（Bitwarden/Vaultwarden 默认 64），而 `hash-wasm` 的 `memorySize` 按 KiB 计数。此前把 64 直接当成 64 KiB 交给 KDF，派生出完全错误的主密钥，服务器按「邮箱或主密码不正确」拒绝——用户看到的是密码错，实际是单位错。现在统一 ×1024（`lib/vault.js` 的 `deriveMasterKey`），mock 服务端同步修正，并新增固定向量测试锁死两家单位（见下）。
+- **「确认读取」的迟到答复会串条目（P0）**：为条目 B 点「确认读取」后立刻切到条目 A，B 的明文密码会被画进 A 的详情面板，且 `revealed` 标志遗留，A 自己的密码会随后直接显示。详情面板现在按「选中项世代号」判定，迟到的答复（含失败分支）一律丢弃。
+- **被放弃的列表查询会覆盖新查询**：快速改搜索词时，先发后到的旧答复会把旧行画上屏幕，首屏还会把这批旧行写进 localStorage 快照。`readVault` 现在在写入 state 前比对世代号，过期答复（含错误分支）直接返回。
+- 前端套件在缺少 `react` / `react-test-renderer` 时打印一行「skipping」后以退出码 0 结束，等于把 129 项面板检查静默变成「全绿」。现在报错并非零退出，缺依赖就是失败。
+
+### 测试
+
+- 新增第十二套离线测试 `test/kdf-units.test.mjs`（13 项）：用固定摘要同时锁住 Argon2id 的正确单位（64 MiB 对应 `memorySize: 64 * 1024`）与旧错误单位（64 KiB），并交叉验证 mock 服务端、`hash-wasm` 直接调用与 `node:crypto` 的 PBKDF2 结果。
+- `test/client-card.test.mjs` 增加两处竞态回归（129 → 142 项）：换条目后迟到的「确认读取」不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照。
+- 十二套离线测试共 444 项全部通过。
+
 ## [0.3.1] — 2026-10-02
 
 ### 修复

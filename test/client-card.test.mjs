@@ -7,7 +7,8 @@
  * registered settings section with react-test-renderer and drives it: list,
  * debounced search, detail, password reveal, copy, the Bitwarden reprompt
  * gate, the TOTP countdown, and the empty / not-configured / no-connection
- * states.
+ * states. Two of the checks are races: a stale list answer for a query the
+ * reader has left, and a late "confirm read" for an entry they have left.
  *
  * Run: node test/client-card.test.mjs
  */
@@ -21,9 +22,12 @@ try {
   react = require('react')
   rendererApi = require('react-test-renderer')
 } catch {
-  console.log('client-card: react / react-test-renderer not installed — skipping')
-  console.log('  install them with: npm install --no-save --legacy-peer-deps react@18.3.1 react-test-renderer@18.3.1')
-  process.exit(0)
+  // A suite that prints "skipping" and exits 0 is a suite that reports success
+  // without running a single assertion — every panel check below would vanish
+  // from the run and nobody would notice. Fail loudly instead.
+  console.error('client-card: react / react-test-renderer not installed — cannot run the panel checks')
+  console.error('  install them with: npm install --no-save --legacy-peer-deps react@18.3.1 react-test-renderer@18.3.1')
+  process.exit(1)
 }
 const { create, act } = rendererApi
 
@@ -1153,6 +1157,120 @@ async function main() {
   await act(async () => {
     badPassword.renderer.unmount()
   })
+
+  // ── a late "confirm read" must not land on another entry ──────────────────
+  // Reported: select a reprompt entry, click 确认读取, then move to a different
+  // entry before the host answers. The late answer painted the first entry's
+  // plaintext password into the second entry's pane and left the reveal flag
+  // set, so that second entry's own password would show the moment it loaded.
+  {
+    let releaseConfirm = null
+    const raceRpc = makeRpc({
+      reveal: (args) => {
+        if (args.id === 'item-3' && args.confirm) {
+          return new Promise((resolve) => {
+            releaseConfirm = () => resolve({ ok: true, value: CONFIRMED_REVEAL })
+          })
+        }
+        if (args.id === 'item-4') {
+          return { ok: true, value: { id: 'item-4', name: '10.0.0.10', type: 'login', username: 'demo-user', password: 'demo-pass-4', uris: [], fields: [] } }
+        }
+        return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
+      },
+    })
+    const race = await mountPanel(mod, {}, raceRpc)
+    const raceText = () => JSON.stringify(race.renderer.toJSON())
+    const raceButtons = () => race.renderer.root.findAllByType('button')
+    const raceRows = () => raceButtons().filter((node) => node.props.role === 'option')
+    const raceSearch = () => race.renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    await act(async () => {
+      raceRows()[2].props.onClick()
+    })
+    await flush()
+    check('race setup: the reprompt entry is gated', raceText().includes('重新验证') && !raceText().includes('reprompt-pass-9'))
+    await act(async () => {
+      raceButtons().find((node) => node.props.children === '确认读取').props.onClick()
+    })
+    await flush()
+    check('race setup: the confirm is in flight', typeof releaseConfirm === 'function')
+    // The toolbar stays mounted while the detail pane loads, so the keyboard
+    // shortcut moves the selection without a trip through the list.
+    check('race setup: the search box is still mounted', Boolean(raceSearch()))
+    await act(async () => {
+      raceSearch().props.onKeyDown({ key: 'ArrowDown', preventDefault: () => {} })
+    })
+    await flush()
+    check('race setup: the next entry is on screen', raceText().includes('demo-user'))
+    await act(async () => {
+      releaseConfirm()
+    })
+    await flush()
+    check("a late confirm answer never paints the other entry's password", !raceText().includes('reprompt-pass-9'), raceText().slice(-240))
+    check('a late confirm answer does not leave the reveal flag set', !raceText().includes('demo-pass-4'), raceText().slice(-240))
+    check('the entry on screen keeps its own detail', raceText().includes('demo-user'))
+    await act(async () => {
+      race.renderer.unmount()
+    })
+  }
+
+  // ── an answer for an abandoned query must not replace the current list ────
+  // Reported: a read for one query came back after a read for another, and the
+  // older rows won — they replaced what the reader had asked for, and the first
+  // page of the older list was written to the snapshot as well.
+  {
+    const base = makeRpc()
+    const originalCall = base.call
+    let releaseSlow = null
+    base.call = async (channel, endpoint, payload) => {
+      const method = String(endpoint).replace(/^vw\//, '')
+      if (method === 'list' && String(payload?.args?.query ?? '') === '') {
+        return new Promise((resolve) => {
+          releaseSlow = () => resolve({
+            ok: true,
+            value: {
+              query: '',
+              matched: 1,
+              returned: 1,
+              offset: 0,
+              hasMore: false,
+              vaultItems: 1,
+              items: [{ id: 'stale-1', name: 'STALE-ROW', type: 'login', username: 'stale@example.com', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }],
+            },
+          })
+        })
+      }
+      return originalCall(channel, endpoint, payload)
+    }
+    // A first open fills the snapshot that the reopen paints from, so the panel
+    // is interactive while its background read is still in flight.
+    const warm = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    await act(async () => {
+      warm.renderer.unmount()
+    })
+    const panel = await mountPanel(mod, {}, base, { keepCache: true })
+    await flush()
+    const panelText = () => JSON.stringify(panel.renderer.toJSON())
+    const search = () => panel.renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    check('race setup: the cached list is painted before the host answers', panelText().includes('GitHub 工作账号'))
+    check('race setup: the background read is in flight', typeof releaseSlow === 'function')
+    await act(async () => {
+      search().props.onChange({ target: { value: '数据库' } })
+    })
+    await flush(350)
+    check('race setup: the newer query painted its rows', panelText().includes('生产数据库口令'))
+    await act(async () => {
+      releaseSlow()
+    })
+    await flush()
+    check('a stale list answer never replaces the newer query', !panelText().includes('STALE-ROW'), panelText().slice(-240))
+    check('the newer query keeps its rows', panelText().includes('生产数据库口令'))
+    const stored = String(storageMock.store.get(SNAPSHOT_KEY) ?? '')
+    check('a stale first page is not stored as the snapshot', !stored.includes('STALE-ROW'))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
 
   // ── no matches ────────────────────────────────────────────────────────────
   const empty = await mountPanel(mod, {}, makeRpc({ list: () => ({ ok: true, value: { query: 'zzz', matched: 0, returned: 0, vaultItems: ITEM_COUNT, items: [] } }) }))

@@ -9,6 +9,7 @@ PR：#6211「Add BuvkB/dsh-vaultwarden (security)」，分支 `add/buvkb-dsh-vau
 - 2026-10-01：随 v0.2.7 发版，把条目的 tarball 从 v0.2.4 更新到 v0.2.7（commit 58329e7b）。
 - 2026-10-02：随 v0.3.0 发版（密文落盘缓存 + 修订号探针），把条目的 tarball 从 v0.2.7 更新到 v0.3.0。
 - 2026-10-02：随 v0.3.1 发版（换令牌失败不再无差别删除会话），把条目的 tarball 从 v0.3.0 更新到 v0.3.1。
+- 2026-10-05：随 v0.3.2 发版（Argon2id 的 KDF 内存单位、面板两处竞态守卫、前端测试可信度），把条目的 tarball 从 v0.3.1 更新到 v0.3.2。
 - 条目文件：`data/plugins/BuvkB__dsh-vaultwarden.yml`（内容与本目录 `entry.yml` 一致）。
 
 ## 后续更新条目

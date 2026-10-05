@@ -145,7 +145,9 @@ export async function serverMasterKey(password, kdf) {
         salt: EMAIL,
         parallelism: kdf.kdfParallelism ?? 4,
         iterations: kdf.kdfIterations ?? 3,
-        memorySize: kdf.kdfMemory ?? 64,
+        // Server side of the same unit: MiB in, KiB to hash-wasm. Keeping this
+        // wrong here would make the mock agree with a broken client.
+        memorySize: (kdf.kdfMemory ?? 64) * 1024,
         hashLength: 32,
         outputType: 'binary',
       }),

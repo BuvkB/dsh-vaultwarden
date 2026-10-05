@@ -90,6 +90,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== offline end-to-end test (mock Vaultwarden) ==="
   node test/mock-e2e.test.mjs
 
+  # KDF units and pinned vectors. This one exists because the mock server below
+  # used to repeat the client's own MiB/KiB mistake, so the end-to-end suite
+  # agreed with a broken client and could never catch it.
+  echo "=== KDF unit + known-vector test ==="
+  node test/kdf-units.test.mjs
+
   echo "=== live sync test (WebSocket notifications) ==="
   node test/live-sync.test.mjs
 
