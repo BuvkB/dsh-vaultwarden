@@ -50,10 +50,20 @@ link_pkg() {
   ' "node_modules/$name" "$DEP_ROOT/$name"
 }
 
-for pkg in @deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/schemastery @deepseek-ai/dsh-llm; do
+PEERS="@deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/schemastery @deepseek-ai/dsh-llm"
+
+for pkg in $PEERS; do
   link_pkg "$pkg"
   echo "  linked $pkg"
 done
+
+# npm prunes symlinks it did not create, so every npm invocation in this script
+# has to be followed by a re-link — and by a re-link of the *whole* peer list.
+# Re-linking a hand-written subset is how `npm install hash-wasm` used to leave
+# the tree unable to resolve @deepseek-ai/dsh-typert-protocol in a fresh clone.
+relink_peers() {
+  for pkg in $PEERS; do link_pkg "$pkg" >/dev/null; done
+}
 
 # ── syntax check ─────────────────────────────────────────────────────────────
 echo "=== syntax check ==="
@@ -72,9 +82,7 @@ else
   echo "=== installing optional hash-wasm (Argon2id support; failures are non-fatal) ==="
   npm install --no-save --no-audit --no-fund --loglevel=error --legacy-peer-deps hash-wasm || \
     echo "  (skipped: PBKDF2 accounts still work; Argon2id accounts will report a clear error)"
-  link_pkg @deepseek-ai/dsh-tools >/dev/null
-  link_pkg @deepseek-ai/schemastery >/dev/null
-  link_pkg @deepseek-ai/dsh-llm >/dev/null
+  relink_peers
   echo "  re-linked host peer packages after npm install"
 fi
 
@@ -148,9 +156,7 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
     echo "=== installing browser-half test deps (react, react-test-renderer) ==="
     npm install --no-save --no-audit --no-fund --loglevel=error --legacy-peer-deps \
       react@18.3.1 react-test-renderer@18.3.1 >/dev/null 2>&1 || true
-    link_pkg @deepseek-ai/dsh-tools >/dev/null
-    link_pkg @deepseek-ai/schemastery >/dev/null
-    link_pkg @deepseek-ai/dsh-llm >/dev/null
+    relink_peers
   fi
   echo "=== settings card test (browser half) ==="
   node test/client-card.test.mjs
