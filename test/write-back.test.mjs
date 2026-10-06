@@ -111,6 +111,9 @@ async function main() {
   check('the search still reports the trash (P0-3)', /回收站/.test(hidden.trashedItems ?? ''), JSON.stringify(hidden.trashedItems))
   const shown = JSON.parse(await client.find('生产数据库口令', 8, undefined, { includeTrashed: true }))
   check('includeTrashed lists it as trashed', shown.matched === 1 && shown.items[0].trashed === true)
+  const merged = await client.findEntries('', 100, 0, undefined, { includeArchived: true, includeTrashed: true })
+  check('the trashed row leads the merged list (P0-3)', merged.items[0]?.id === 'cipher-db', JSON.stringify(merged.items.map((item) => item.id)))
+  check('behind it the live rows follow in their own order', merged.items.length >= 4 && merged.items.slice(1).every((item) => !item.trashed), JSON.stringify(merged.items.map((item) => item.id + (item.trashed ? '*' : ''))))
   let readError = null
   try {
     await client.get('cipher-db')

@@ -143,7 +143,7 @@ bitwarden_restore { "id": "…" }                        → 从回收站恢复�
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.5.0   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.5.1   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -152,7 +152,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 582 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 584 项）
 ```
 
 | 套件 | 覆盖 |
@@ -162,7 +162,7 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线�
 | `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（38） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |
-| `test/write-back.test.mjs`（46） | **P0/P1 回归**：软删端点与回收站可见性、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
+| `test/write-back.test.mjs`（48） | **P0/P1 回归**：软删端点与回收站可见性、**回收站条目排在合并列表最前**、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
 | `test/cache-store.test.mjs`（69） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
 | `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |

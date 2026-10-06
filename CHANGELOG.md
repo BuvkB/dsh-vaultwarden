@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-10-06
+
+修一处 v0.5.0 的排序回归：打开回收站筛选后，软删条目并没有像说明那样排在列表最前。
+
+### 修复
+
+- **回收站条目没有排到列表最前**：`findEntries` 把回收站条目拼在正常条目之前，但紧接着的排序是「分数 → 名称」两级比较器，名称 tiebreak 让「拼在前面」失效（稳定排序只在比较器返回 0 时保留输入顺序），空查询下软删条目按名字混在正常条目里，大库中落到第一页之外——面板点开「回收站 {n}」chip 后第一屏看不到任何回收站条目。现在回收站标志写进比较器本身（分数 → 回收站 → 名称），软删条目稳定领先合并列表。
+
+### 测试
+
+- `test/write-back.test.mjs` 46 → 48 项：新增「回收站条目领先合并列表、其余条目保持原顺序」两处检查；修复前该用例失败（`46 passed, 2 failed`）。
+- 十三套离线测试共 584 项全部通过。
+
 ## [0.5.0] — 2026-10-06
 
 v0.4.0 攒下的读写能力搬进面板：条目页能归档、移入回收站、恢复、移动文件夹，列表页有回收站与归档筛选，详情页补齐五类条目的投影。
