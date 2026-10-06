@@ -109,7 +109,11 @@ async function main() {
   })
 
   const toolNames = tools.map((tool) => tool.name)
-  check('registers the 7 credential tools', ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync', 'bitwarden_create', 'bitwarden_update', 'bitwarden_delete'].every((n) => toolNames.includes(n)), toolNames.join(','))
+  check(
+    'registers the 9 credential tools',
+    ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync', 'bitwarden_folders', 'bitwarden_create', 'bitwarden_update', 'bitwarden_delete', 'bitwarden_restore'].every((n) => toolNames.includes(n)),
+    toolNames.join(','),
+  )
   check('find tool describes the no-password rule', /不含密码/.test(tools.find((t) => t.name === 'bitwarden_find').description))
   check('create tool requires a name', (tools.find((t) => t.name === 'bitwarden_create').parameters.required ?? []).includes('name'))
   check('injects the optional settings service it needs', injected.includes('settings'), injected.join(','))

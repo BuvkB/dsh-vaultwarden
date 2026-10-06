@@ -4,6 +4,43 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-10-06
+
+实现《dsh-vaultwarden 缺失功能优先级排序》里的全部 6 项 P0 与 8 项 P1：写回不再丢字段，删除链路可回滚，回收站有出口，写回带并发保护，五类条目都能读写，文件夹 id 可见可清。
+
+### 修复
+
+- **软删实际是彻底删除（P0）**：`remove()` 的非 permanent 分支原来请求 `POST /api/ciphers/{id}/delete`——在 Vaultwarden 里这是**彻底删除**，条目从数据库直接消失，插件却回复"已进入回收站"。现在软删改走 `PUT /api/ciphers/{id}/delete`；`permanent: true` 走 `DELETE` 且必须同时传 `confirm: true`，否则拒绝并在响应里说明。`test/mock-server.mjs` 同步改成分支语义（它此前把 POST 实现成软删，正是这条错误一直没被测试发现的原因）。
+- **写回静默丢字段（P0）**：写回改为**复用条目原有的 item key**，只对本次变更的字段重新加密，其余键原样带回——`login.fido2Credentials`（通行密钥）、`passwordHistory`、`login.passwordRevisionDate`、`login.uri`（单数旧字段）、`uris[].match` 匹配策略、`archivedDate`、附件元数据都不再丢。此前任何一次改密都会顺手抹掉前五类数据，且没有任何提示。
+- **写回覆盖并发修改（P0）**：PUT 现在带 `lastKnownRevisionDate`；服务端发现条目已被其他客户端改过时返回 400，插件翻译成"条目已被其他客户端修改，请重新读取后再试"（`stale_revision`）。
+- **非 login 类型不能读写（P0）**：`type` 不再硬编码为 1，支持 `secureNote`/`card`/`identity`/`sshKey` 的创建与更新，读侧同步投影这四类内容。安全笔记的 `type` 是明文 JSON 而不是 EncString，按官方格式单独处理（加密它会让官方客户端读到乱码）。
+- **文件夹 id 出不来、清不掉（P0）**：列表投影 `folderId`，新增 `bitwarden_folders`（id + 名字 + 条目数 + 未归类条数）；`folderId` 三态——不传=不动、传 id=移入、传 `null` 或空串=移出（原来的 `??` 回退让"移出"永远失败）。
+- **回收站没有出口（P0）**：`bitwarden_find`/`bitwarden_get` 加 `includeTrashed`，`bitwarden_status` 报回收站与归档条数，新增 `bitwarden_restore` 工具与 `vw/restore` RPC。后端 `restore()` 早已实现，只是没有暴露。
+- **归档条目混在正式列表里（P1）**：投影 `archived`；`bitwarden_find` 默认排除归档并提示"还有 N 条归档"，`includeArchived` 可查；`bitwarden_update` 支持归档/取消归档。此前写回还会把归档条目悄悄拽出归档（服务端把"没带 archivedDate"解释为取消归档）。
+- **令牌失效后的后台兜底登录没有状态（P1）**：重新登录成功、失败、被拒绝、需要两步验证都会记录 `lastSessionEvent`，`bitwarden_status` 与面板状态接口都会带上；失败后有 60 秒冷却，不对同一个失效会话反复重试。
+- **网关 `configure` 会静默丢掉 `ask` 档**：accessMode 白名单以前内联写成 `readonly || auto`，`ask` 传进来会被忽略；现在统一为 `['readonly', 'ask', 'auto']`。
+
+### 新增
+
+- **`encryptedFor` 写回字段（P1）**：创建与更新都带当前用户 uuid。Vaultwarden main 已把它列为必填（PR #7693），不带的话升级到该版本后所有写回会整条 422。
+- **附件与密码历史读取（P1）**：投影 `attachments`（文件名、大小、下载地址，不下载内容）与 `passwordHistory`（含 `lastUsedDate`），并用 `hasFido2` 标记条目是否带通行密钥。
+- **组织条目写入（P1）**：创建组织条目传 `organizationId` + `collectionIds` 走 `POST /api/ciphers/create`，字段用组织密钥包裹；更新组织条目复用组织密钥与条目原 key。
+- **文件夹工具与回收站/归档开关**：全局工具 7 → 9（新增 `bitwarden_folders`、`bitwarden_restore`）。
+- **面板归档徽标**：面板列表保留显示归档条目并带「已归档」徽标（模型侧搜索默认不返回归档）。
+
+### 变更
+
+- **写回权限门禁下沉**：readonly 档的拒绝判断从工具包装层下沉到 `VaultMutations` 的 guard（`write_disabled`），工具层与网关层共用同一个判断；`ask` 档的审批流程不变。
+- **落盘缓存加完整性校验**：密文缓存用 HMAC-SHA256 签名（密钥 `~/.dsh/data/dsh-vaultwarden/cache.key`，0600，随机 32 字节），并严格比对服务器地址与邮箱；缓存版本升到 2，未签名、签名不符或账号不匹配的缓存一律丢弃重下。
+- **协议事实修正**：Vaultwarden 的 `/api/sync` 没有 `syncToken` 增量（1.37.3 的 `SyncData` 只有 `excludeDomains` 一个参数），"协议支持增量同步"的说法不成立；当前实现是"密文落盘缓存 + 13 字节修订号探针 + 需要时全量下载"。
+
+### 测试
+
+- 新增第十三套离线测试 `test/write-back.test.mjs`（46 项）：软删端点与回收站可见性、字段保真（通行密钥/密码历史/URI 匹配策略/附件/归档日期/原 key 不轮换）、并发 400 的翻译、文件夹三态、归档开关、面板列表缓存。
+- `test/mutations.test.mjs` 扩到 38 项：五类条目的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版（账号键）条目的写回。
+- `test/mock-server.mjs` 对齐真实服务端语义：`POST /delete` 改回彻底删除，新增 `PUT /delete`（软删）与 `PUT /restore`；PUT 保留请求未带的附件；新增 `richCipher` 夹具（通行密钥/密码历史/匹配策略/附件/归档）。
+- 十三套离线测试共 518 项全部通过。
+
 ## [0.3.2] — 2026-10-05
 
 ### 修复

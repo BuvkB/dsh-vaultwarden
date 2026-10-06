@@ -17,8 +17,8 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → 增量 `/api/sync` + 解密换缓存；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
-| 7 个全局工具 | `bitwarden_find`（检索，不含密码）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段）、`bitwarden_status`（配置/连通/解锁/同步模式）、`bitwarden_sync`（强制同步）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
+| 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → `/api/sync` 重同步 + 解密换缓存（Vaultwarden 的同步接口没有增量参数，只有全量）；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
+| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段/文件夹名；默认不含密码，也不含归档与回收站）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段/附件名/密码历史/卡片/身份/SSH 密钥）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
 | 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查凭据库，而不是先问用户 |
 | 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：9 个字段（服务器/邮箱/主密码/API 密钥/同步选项/权限档），密钥字段为只写 |
 | 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
@@ -47,7 +47,7 @@
 | `cacheMinutes` | 解锁后的内存缓存时长（默认 30 分钟） |
 | `localCache` | 本地密文缓存（默认开）。把上次同步的密文写到本机，下次启动先出列表、再用 13 字节的账号修订号问服务器变没变；关闭则每次启动都重新全量下载 |
 | `deviceIdentifier` | 可选设备标识。官方桌面/浏览器客户端会持久化稳定值；**留空按「服务器+邮箱」确定性派生，不写盘** |
-| `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（每次写回需用户确认）/ `auto`（直接写回）。仅个人条目，组织条目明确报错 |
+| `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（每次写回需用户确认）/ `auto`（直接写回）。个人条目与组织条目都可写（创建组织条目传 `organizationId` + `collectionIds`） |
 | `sessionDays` | 登录会话保留天数（默认 30，0=每次重登）。**按闲置计时**：期间只要用过一次就自动续期，闲置超期才失效 |
 
 ### 2. 环境变量
@@ -62,14 +62,22 @@ profile 的 cordis 配置里给插件传入同名字段即可。
 ## 用法（模型侧）
 
 ```
-bitwarden_find  { "query": "github" }                  → 条目列表（元信息，无密码）
-bitwarden_get   { "id": "…", "field": "password" }     → 用户名 + 密码
-bitwarden_get   { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码
-bitwarden_status{ "refresh": true }                    → 状态报告（含 liveSync: 模式/连接/最近同步）
-bitwarden_sync  { }                                    → 强制重新同步
-bitwarden_create{ "name": "新站点", "username": "…", "password": "…" } → 写回（需 accessMode=ask/auto）
-bitwarden_update{ "id": "…", "password": "新密码" }     → 改密（需 accessMode=ask/auto）
-bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（需 accessMode=ask/auto）
+bitwarden_find    { "query": "github" }                → 条目列表（元信息，无密码）
+bitwarden_find    { "query": "旧", "includeTrashed": true, "includeArchived": true }
+                                                       → 连回收站与归档一起列（默认都不列）
+bitwarden_get     { "id": "…", "field": "password" }   → 用户名 + 密码
+bitwarden_get     { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码
+bitwarden_status  { "refresh": true }                  → 状态报告（含 liveSync / 条目/归档/回收站条数 / 最近一次会话事件）
+bitwarden_sync    { }                                  → 强制重新同步
+bitwarden_folders { }                                  → 文件夹 id + 名字 + 条目数（folderId 从这里来）
+bitwarden_create  { "name": "新站点", "username": "…", "password": "…" } → 写回（需 accessMode=ask/auto）
+bitwarden_create  { "name": "新站点", "type": "card", "card": { "number": "…" } } → 信用卡/身份/安全笔记/SSH 密钥同理
+bitwarden_update  { "id": "…", "password": "新密码" }   → 改密（需 accessMode=ask/auto）
+bitwarden_update  { "id": "…", "folderId": null }      → 移出文件夹（不传=不动，传 id=移入）
+bitwarden_update  { "id": "…", "archived": true }      → 归档 / false 取消归档
+bitwarden_delete  { "id": "…" }                        → 软删进回收站（需 accessMode=ask/auto）
+bitwarden_delete  { "id": "…", "permanent": true, "confirm": true } → 彻底删除（不可逆，必须带 confirm）
+bitwarden_restore { "id": "…" }                        → 从回收站恢复（需 accessMode=ask/auto）
 ```
 
 ## 用法（人侧）
@@ -82,8 +90,11 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 - **通知类型**：按官方 `NotificationType` 枚举处理——`LogOut`（会话在别处被注销）会清除本地令牌与缓存，其余类型触发重同步。
 - **SignalR 协议**：negotiate → WebSocket（`access_token` 走 query）→ `{"protocol":"json","version":1}` 握手 → type 6 keepalive 应答 → type 1 ReceiveMessage。
 - **reprompt**：`reprompt: 1` 的条目不自动返回明文（工具与面板同一规则，`confirm` 才读）。
-- **回收站语义**：软删（`deletedDate`）后的条目不进入列表，可 restore；彻底删除走 purge。
-- **per-item key**：写回时按官方做法生成 64 字节条目密钥，字段用条目密钥、`cipher.key` 用用户密钥包裹（类型 2 EncString）。
+- **回收站语义**：软删走 `PUT /api/ciphers/{id}/delete`（写 `deletedDate`），彻底删除走 `DELETE /api/ciphers/{id}`；`POST /delete` 在服务端是彻底删除，插件不再使用。回收站条目默认不列出，`includeTrashed` 可看，`bitwarden_restore` 恢复。
+- **归档语义**：`archivedDate` 存在即归档；搜索默认排除，`includeArchived` 可看；写回不带该字段会被服务端解释为取消归档，所以插件原样带回。
+- **per-item key**：**更新复用条目原有的 64 字节密钥**（只对本次变更的字段重新加密），创建时才新生成一把；`cipher.key` 用用户密钥或组织密钥包裹（类型 2 EncString）。这样改密不会连带抹掉通行密钥、密码历史、URI 匹配策略这些插件不认识的字段。
+- **并发保护**：写回带 `lastKnownRevisionDate`；服务端发现条目已被其他客户端改过时返回 400，插件回「条目已被其他客户端修改，请重新读取后再试」。
+- **组织条目**：创建走 `POST /api/ciphers/create`（带 `collectionIds`），字段用组织密钥包裹；更新复用组织密钥与条目原 key。
 - **限流**：429 时按官方客户端的退避思路重试一次。
 
 ## 安全说明
@@ -92,7 +103,8 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 - 落盘缓存里放的是**服务器原样返回的密文**（`~/.dsh/data/dsh-vaultwarden/vault-cache.json.gz`，gzip 压缩、权限 `0600`），插件自己不解密也不落明文；解密只在内存里发生。
 - 配置表单由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）；面板数据走 `/api` connection RPC（已认证会话），**没有绕过鉴权的自建路由**。
 - 工具返回的明文凭据会进入会话上下文（这是"让模型能用密码"的前提）。提示词要求模型不要回显、不要写入文件。
-- 写回默认关闭（`accessMode: readonly`）；`ask` 档每次写入都走 DSH 审批确认，`auto` 直接写入。两者都只能写个人条目，组织条目明确报错。
+- 写回默认关闭（`accessMode: readonly`）；`ask` 档每次写入都走 DSH 审批确认，`auto` 直接写入。个人条目与组织条目都支持；彻底删除必须显式带 `confirm: true`，避免一次调用不可逆地抹掉条目。
+- 落盘缓存带 HMAC-SHA256 签名（密钥 `~/.dsh/data/dsh-vaultwarden/cache.key`，`0600`）：签名不符、账号不匹配或没有密钥的缓存一律丢弃重下，防止把别处的缓存文件当成自己的读进来。
 - 与本地 `dsh-vault` 插件**无标识冲突**（条目 id / 工具名 / 设置命名空间 / 设置页 id 均不同）：本插件是 `dsh-vaultwarden` ↔ `bitwarden_*` ↔ `bitwarden` ↔ `vaultwarden`，dsh-vault 是 `vault` ↔ `vault_*` ↔ `settings.vault` ↔ `vault`。
 
 ## 排错
@@ -129,7 +141,7 @@ bitwarden_delete{ "id": "…", "permanent": false }      → 软删/彻底删（
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.2.4   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.4.0   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -138,7 +150,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十二套离线测试（共 444 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 518 项）
 ```
 
 | 套件 | 覆盖 |
@@ -147,17 +159,18 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十二套离线�
 | `test/mock-e2e.test.mjs`（41） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 |
 | `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
 | `test/live-sync.test.mjs`（17） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
-| `test/mutations.test.mjs`（22） | 写回增改删恢复 + per-item key 往返 |
-| `test/cache-store.test.mjs`（61） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
+| `test/mutations.test.mjs`（38） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |
+| `test/write-back.test.mjs`（46） | **P0/P1 回归**：软删端点与回收站可见性、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
+| `test/cache-store.test.mjs`（69） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
 | `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
 | `test/gateway-flow.test.mjs`（52） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
-| `test/access-mode.test.mjs`（16） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（142） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
+| `test/access-mode.test.mjs`（17） | readonly / ask / auto 三档权限 |
+| `test/client-card.test.mjs`（145） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 
-mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
+mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。它的写入分支按 Vaultwarden 1.37.3 的实际语义实现：`PUT /ciphers/{id}` 整条替换、`POST /delete` 彻底删、`PUT /delete` 软删、`PUT /restore` 恢复、附件不在请求里就不动——mock 与真实服务端语义不一致时，测试会把错误当成正确固化下来（0.3.2 那次 Argon2 单位故障就是这样发生的）。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
 
 ## 登录与会话
 

@@ -241,6 +241,10 @@ export async function buildFixtures(options = {}) {
     },
   ]
 
+  const folders = [
+    { id: 'folder-work', name: encryptString('工作', userKey), revisionDate: '2026-01-01T00:00:00.000Z' },
+  ]
+
   // Truly legacy type-0 (AES-CBC without MAC) cipher strings: our client still
   // reads them, while modern official clients dropped support, so the interop
   // fixture turns them off.
@@ -279,6 +283,54 @@ export async function buildFixtures(options = {}) {
       revisionDate: '2026-01-07T03:04:05.000Z',
     })
   }
+
+  if (options.richCipher) {
+    // An item carrying every field a whole-cipher replace can silently drop:
+    // passkeys, password history, the URI match policy, an attachment, a
+    // password-revision date and the singular legacy `login.uri`. It starts
+    // archived so the archive flag is exercised too.
+    // The singular legacy `login.uri` holds the very same EncString as
+    // `uris[0].uri` on a real account (measured: 433/433 identical), so the
+    // fixture shares the ciphertext instead of re-encrypting the plaintext.
+    const richLoginUri = encryptString('https://spa.jindom.cc/login', userKey)
+    ciphers.push({
+      id: 'cipher-rich',
+      type: 1,
+      name: encryptString('SPA 管理后台', userKey),
+      notes: encryptString('单点登录入口', userKey),
+      folderId: 'folder-work',
+      login: {
+        username: encryptString('rich-user', userKey),
+        password: encryptString('rich-pass-1', userKey),
+        passwordRevisionDate: '2026-01-08T00:00:00.000Z',
+        fido2Credentials: [{ credentialId: 'cred-1', rpId: 'spa.jindom.cc' }],
+        uri: richLoginUri,
+        uris: [
+          { uri: richLoginUri, match: 3, uriChecksum: 'checksum-1' },
+          { uri: encryptString('https://spa.jindom.cc/sso', userKey), match: 0, uriChecksum: 'checksum-2' },
+        ],
+      },
+      fields: [{ name: encryptString('区域', userKey), value: encryptString('cn-east', userKey), type: 0 }],
+      passwordHistory: [
+        { password: encryptString('rich-pass-0', userKey), lastUsedDate: '2025-12-01T00:00:00.000Z' },
+      ],
+      archivedDate: '2026-02-01T00:00:00.000Z',
+      attachments: [
+        {
+          id: 'att-1',
+          fileName: encryptString('部署说明.txt', userKey),
+          size: '129',
+          sizeName: '129 bytes',
+          url: 'https://example.invalid/attachments/att-1',
+        },
+      ],
+      revisionDate: '2026-01-08T03:04:05.000Z',
+    })
+  }
+
+  // A folder renamed *after* the client cached its vault: the entries keep the
+  // same folderId, so a snapshot that is not re-read reports the old name.
+  if (options.renameFolder) folders[0].name = encryptString(options.renameFolder, userKey)
 
   return {
     kdf,
@@ -334,7 +386,7 @@ export async function buildFixtures(options = {}) {
         ],
       },
       ciphers,
-      folders: [{ id: 'folder-work', name: encryptString('工作', userKey), revisionDate: '2026-01-01T00:00:00.000Z' }],
+      folders,
       collections: [{ id: 'col-1', organizationId: 'org-1', name: encryptString('运维', userKey) }],
     },
   }
@@ -352,7 +404,7 @@ export async function startMockServer(options = {}) {
   if (!fixtures) return null
   const { kdf, masterPasswordHash, encryptedUserKey, syncPayload, apiClientId, apiClientSecret } = fixtures
 
-  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [], twoFactorChallenges: 0, twoFactorAccepted: 0, revisionChecks: 0 }
+  const stats = { tokenGrants: [], refreshes: 0, syncs: 0, tokenIssued: 0, paths: [], deviceIdentifiers: [], created: 0, mutations: [], twoFactorChallenges: 0, twoFactorAccepted: 0, revisionChecks: 0, lastWrite: null }
   // The account revision the vault cache probes. Real Vaultwarden bumps
   // `users.updated_at` whenever a cipher or folder is written, so the mutations
   // below move it too — that is what makes the probe worth trusting.
@@ -526,10 +578,46 @@ export async function startMockServer(options = {}) {
         const auth = req.headers.authorization ?? ''
         if (!tokens.has(auth.replace(/^Bearer /, ''))) return send(401, { message: 'Unauthorized' })
         const ciphers = fixtures.syncPayload.ciphers
-        if (req.method === 'POST' && req.url === '/api/ciphers') {
+        const folders = fixtures.syncPayload.folders
+        // Guard rails the real server also has, so a regression in the plugin
+        // shows up here instead of only on the wire. `lastKnownRevisionDate`
+        // is request-only and `encryptedFor` is a wire field the 1.37.x
+        // server does not know; neither belongs in the stored row, but the
+        // tests want to see what was sent.
+        const remember = (method, path, incoming) => {
+          stats.lastWrite = { method, path, body: incoming }
+          const { lastKnownRevisionDate, encryptedFor, ...rest } = incoming
+          return rest
+        }
+        if (req.method === 'POST' && req.url === '/api/ciphers/create') {
+          // ShareCipherData: { cipher, collectionIds } — the organization create path.
+          const incoming = JSON.parse(body || '{}')
+          if (!incoming.cipher?.type || !incoming.cipher?.name) return send(400, { message: 'Data missing' })
+          if (!incoming.cipher.organizationId) {
+            return send(400, { message: 'Organization mismatch. Please resync the client before updating the cipher' })
+          }
           stats.created++
           const created = {
-            ...JSON.parse(body || '{}'),
+            ...remember('POST', req.url, incoming.cipher),
+            id: `cipher-created-${stats.created}`,
+            collectionIds: incoming.collectionIds ?? [],
+            revisionDate: new Date().toISOString(),
+          }
+          ciphers.push(created)
+          bumpRevision()
+          stats.mutations.push('create')
+          return send(200, created)
+        }
+        if (req.method === 'POST' && req.url === '/api/ciphers') {
+          const incoming = JSON.parse(body || '{}')
+          // Real Vaultwarden stores the cipher body as sent and derives the
+          // row from it; a body that forgets the type/name is rejected there
+          // too (tag 1.37.3 :507-526 "Invalid type" / "Data missing").
+          if (!incoming.type) return send(400, { message: 'Data missing' })
+          if (!incoming.name) return send(400, { message: 'Data missing' })
+          stats.created++
+          const created = {
+            ...remember('POST', req.url, incoming),
             id: `cipher-created-${stats.created}`,
             revisionDate: new Date().toISOString(),
           }
@@ -545,15 +633,53 @@ export async function startMockServer(options = {}) {
           const index = ciphers.findIndex((cipher) => cipher.id === id)
           if (index < 0) return send(404, { message: 'Cipher not found' })
           if (req.method === 'PUT' && !action) {
+            const incoming = JSON.parse(body || '{}')
+            // Optimistic concurrency, same rule as the real server: a stale
+            // `lastKnownRevisionDate` is rejected with 400 (tag 1.37.3
+            // src/api/core/ciphers.rs:420-432, 1s tolerance).
+            if (incoming.lastKnownRevisionDate) {
+              const known = Date.parse(incoming.lastKnownRevisionDate)
+              const current = Date.parse(ciphers[index].revisionDate)
+              if (Number.isFinite(known) && Number.isFinite(current) && Math.abs(current - known) > 1000) {
+                return send(400, { message: 'The client copy of this cipher is out of date. Resync the client and try again.' })
+              }
+            }
+            if (incoming.folderId && !folders.some((folder) => folder.id === incoming.folderId)) {
+              return send(400, { message: 'Invalid folder' })
+            }
             // The real API replaces the whole cipher; merging would leave
-            // stale fields encrypted under the previous per-item key.
-            const updated = { ...JSON.parse(body || '{}'), id, revisionDate: new Date().toISOString() }
+            // stale fields encrypted under the previous per-item key. A body
+            // without `folderId` moves the item out of its folder — the server
+            // reads folder_id through `deser_opt_nonempty_str` and then calls
+            // move_to_folder(None) (tag 1.37.3 src/api/core/ciphers.rs:475-479,
+            // :537), so the stored row has no folder_id at all.
+            const updated = { ...remember('PUT', req.url, incoming), id, revisionDate: new Date().toISOString() }
+            if (!updated.folderId) delete updated.folderId
+            // Attachments live in their own table on the real server and a
+            // cipher PUT never removes one — it only rewrites a key when the
+            // request carries `attachments2` (tag 1.37.3
+            // src/api/core/ciphers.rs:482-505). Carrying the row's attachments
+            // over keeps the mock honest about that.
+            if (ciphers[index].attachments && !updated.attachments) {
+              updated.attachments = ciphers[index].attachments
+            }
             ciphers[index] = updated
             bumpRevision()
             stats.mutations.push('update')
             return send(200, updated)
           }
           if (req.method === 'POST' && action === '/delete') {
+            // Real Vaultwarden: POST /ciphers/{id}/delete is the *permanent*
+            // hard delete (tag 1.37.3 src/api/core/ciphers.rs:1455-1465,
+            // "// permanent delete"); PUT is the soft delete. The mock used to
+            // soft-delete here, which is what let the plugin's wrong-endpoint
+            // bug stay green for a whole release.
+            ciphers.splice(index, 1)
+            bumpRevision()
+            stats.mutations.push('purge')
+            return send(200, {})
+          }
+          if (req.method === 'PUT' && action === '/delete') {
             ciphers[index] = { ...ciphers[index], deletedDate: new Date().toISOString() }
             bumpRevision()
             stats.mutations.push('delete')
@@ -572,6 +698,7 @@ export async function startMockServer(options = {}) {
             stats.mutations.push('purge')
             return send(200, {})
           }
+          return send(405, { message: 'method not allowed' })
         }
         return send(404, { message: 'not found' })
       }

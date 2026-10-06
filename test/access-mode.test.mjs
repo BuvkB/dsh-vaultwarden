@@ -99,7 +99,7 @@ async function main() {
   // ── readonly: every write tool refuses up front ────────────────────────────
   {
     const { tools } = boot('readonly')
-    for (const name of ['bitwarden_create', 'bitwarden_update', 'bitwarden_delete']) {
+    for (const name of ['bitwarden_create', 'bitwarden_update', 'bitwarden_delete', 'bitwarden_restore']) {
       const tool = toolNamed(tools, name)
       let result = null
       try {
@@ -109,7 +109,7 @@ async function main() {
       }
       check(`readonly refuses ${name}`, typeof result === 'string' && result.includes('写回已停用'), String(result).slice(0, 80))
     }
-    const reads = ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync']
+    const reads = ['bitwarden_find', 'bitwarden_get', 'bitwarden_status', 'bitwarden_sync', 'bitwarden_folders']
     check('readonly still registers the read tools', reads.every((name) => Boolean(toolNamed(tools, name))), reads.filter((n) => !toolNamed(tools, n)).join(','))
   }
 

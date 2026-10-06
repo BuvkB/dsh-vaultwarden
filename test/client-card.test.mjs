@@ -337,6 +337,34 @@ async function main() {
   check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
 
+  // ── an archived entry stays visible in the list, and says so ─────────────
+  // The host's list read asks for archived rows on purpose (a retired entry
+  // must stay findable for the person who filed it) and flags them; the row
+  // carries a badge so it does not read as a live credential. The model-facing
+  // search hides them by default — that side is tested in write-back.
+  {
+    const archivedRpc = makeRpc({
+      list: () => ({
+        ok: true,
+        value: {
+          query: '',
+          matched: 1,
+          returned: 1,
+          vaultItems: 1,
+          items: [{ id: 'item-archived', name: '旧运维账号', type: 'login', username: 'ops@example.com', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false, archived: true }],
+        },
+      }),
+    })
+    const panel = await mountPanel(mod, {}, archivedRpc)
+    const panelText = JSON.stringify(panel.renderer.toJSON())
+    check('an archived row stays on the list', panelText.includes('旧运维账号'))
+    check('an archived row carries a badge', panelText.includes('已归档'), panelText.slice(0, 240))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+  check('a live list carries no archive badge', !text().includes('已归档'))
+
   // search: debounced reload
   const search = () => renderer.root.findByType('input')
   await act(async () => {

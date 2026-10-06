@@ -108,6 +108,13 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== cipher write-back test ==="
   node test/mutations.test.mjs
 
+  # The P0/P1 regressions: trash vs permanent delete endpoints, optimistic
+  # concurrency, folder tri-state, and "a write must not drop a field it did
+  # not touch". These exist because the mock used to share the plugin's own
+  # mistake, so the older suite could stay green through both.
+  echo "=== write-back regression test (trash / concurrency / field preservation) ==="
+  node test/write-back.test.mjs
+
   # Host-entry smoke test: imports lib/index.js and runs apply() against a fake
   # host context, so a broken Config schema or registration path fails here
   # instead of at startup.

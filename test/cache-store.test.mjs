@@ -91,6 +91,39 @@ async function unitChecks() {
   check('the email comparison is case-insensitive', store.load({ serverUrl: 'https://vault.example', email: 'DSH-Test@Example.com' }) !== null)
   check('load without expectations skips the account check', store.load()?.revision === 42)
 
+  // ── integrity: the envelope must be signed by this machine's key ─────────
+  const signed = readCache(scratch.cachePath)
+  check('a saved record carries a 64-hex MAC', typeof signed.mac === 'string' && /^[0-9a-f]{64}$/.test(signed.mac), String(signed.mac))
+  check('the MAC key file is written privately (0600)', modeOf(store.keyPath) === 0o600, modeOf(store.keyPath).toString(8))
+
+  const unsigned = { ...signed }
+  delete unsigned.mac
+  writeFileSync(scratch.cachePath, gzipSync(JSON.stringify(unsigned)))
+  check('an unsigned record is discarded, never served', store.load({}) === null && !existsSync(scratch.cachePath))
+
+  store.save(record)
+  const tampered = readCache(scratch.cachePath)
+  tampered.payload = { ...tampered.payload, ciphers: [{ id: 'planted' }] }
+  writeFileSync(scratch.cachePath, gzipSync(JSON.stringify(tampered)))
+  check('a payload altered after signing is discarded', store.load({}) === null && !existsSync(scratch.cachePath))
+
+  store.save(record)
+  const otherKey = scratchDir('otherkey')
+  const foreign = new CacheStore(scratch.cachePath, { keyPath: otherKey.cachePath })
+  check('a record signed by another machine\'s key is refused', foreign.load({}) === null && !existsSync(scratch.cachePath))
+  otherKey.dispose()
+
+  store.save(record)
+  rmSync(store.keyPath, { force: true })
+  check('without the key file nothing can be verified', store.load({}) === null && !existsSync(scratch.cachePath))
+  store.save(record)
+  check('the next save recreates the key file', existsSync(store.keyPath))
+
+  const incomplete = { ...record, serverUrl: undefined, email: undefined, mac: undefined }
+  store.save(incomplete)
+  check('a record missing the account fields is refused when checked', store.load({ serverUrl: 'https://vault.example', email: EMAIL }) === null)
+
+  store.save(record)
   check('an aged record is not trusted', store.trusted({ ...record, savedAt: Date.now() - MAX_TRUST_MS - 1000 }) === false)
   check('exactly at the window edge it is still trusted', store.trusted({ ...record, savedAt: Date.now() - MAX_TRUST_MS + 60_000 }) === true)
   check('a record without a usable timestamp is not trusted', store.trusted({ ...record, savedAt: 'yesterday' }) === false)
