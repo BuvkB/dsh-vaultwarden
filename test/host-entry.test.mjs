@@ -150,7 +150,7 @@ async function main() {
   const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
   const { VaultGateway } = await import('../lib/gateway.js')
   const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
-  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge'].every((name) => markers.includes(name)), markers.join(','))
+  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge', 'boot', 'restore', 'folders'].every((name) => markers.includes(name)), markers.join(','))
   check('every Remote method has a source-mode-safe signature', (() => {
     // The gateway's SRC mode parses the parameter list as plain identifiers:
     // defaults, destructuring and rest are rejected at call time.

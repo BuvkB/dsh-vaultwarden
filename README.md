@@ -18,10 +18,10 @@
 | 能力 | 说明 |
 | --- | --- |
 | 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → `/api/sync` 重同步 + 解密换缓存（Vaultwarden 的同步接口没有增量参数，只有全量）；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
-| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段/文件夹名；默认不含密码，也不含归档与回收站）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段/附件名/密码历史/卡片/身份/SSH 密钥）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
+| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段；默认不含密码，也不含归档与回收站）、`bitwarden_get`（密码/用户名/TOTP/备注/自定义字段/附件名/密码历史/卡片/身份/SSH 密钥）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
 | 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查凭据库，而不是先问用户 |
-| 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：9 个字段（服务器/邮箱/主密码/API 密钥/同步选项/权限档），密钥字段为只写 |
-| 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
+| 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：12 个字段（服务器/邮箱/主密码/API 密钥/同步与缓存开关/权限档/会话天数），密钥字段为只写 |
+| 条目浏览面板 | 设置 → 凭据库 独立页面：搜索、列表、详情、复制、TOTP 30 秒倒计时、reprompt 条目受保护；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）各自的详情字段、附件与密码历史折叠区；列表带**回收站 chip + 文件夹筛选 + 归档筛选**（回收站条目划掉显示并带徽标）；`accessMode` 非 readonly 时详情底部出现**写操作**（归档/取消归档、移入回收站、恢复、移动文件夹，逐个二次确认）；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
 | 认证通道 | 面板经 `/api` connection RPC 取数（`vw/*` 命名空间）——**走操作者已认证会话**，插件不自建 HTTP 路由 |
 | 插件列表彩色图标 | 按宿主 artwork 规范提供包根 `icon.svg`（双层盾牌：紫 #6C4DF6 + 蓝 #2E6BE6，白色镂空钥匙孔）；设置页「凭证据库」一行同用盾牌线稿，替换宿主默认齿轮 |
 
@@ -82,7 +82,9 @@ bitwarden_restore { "id": "…" }                        → 从回收站恢复�
 
 ## 用法（人侧）
 
-**设置 → 凭据库**（左栏新增入口）：搜索框（`/` 聚焦、Esc 清空、↑↓ 选择）、条目列表（首字母头像/用户名/URI/收藏/TOTP 徽标）、详情（密码默认掩码可切换、复制按钮、TOTP 倒计时进度条、备注/自定义字段/目录）。Bitwarden 里开了「重新验证」的条目不会自动出明文，需点「确认读取」。
+**设置 → 凭据库**（左栏新增入口）：搜索框（`/` 聚焦、Esc 清空、↑↓ 选择）、筛选行（回收站 chip 带条数 / 文件夹 / 归档三档：含归档·只看归档·隐藏归档；改动任一档立即重查，右侧出现「清除筛选」）、条目列表（首字母头像/用户名/URI/收藏/TOTP 徽标；归档条目带「已归档」徽标，回收站条目名称划掉并带「回收站」徽标）、详情（密码默认掩码可切换、复制按钮、TOTP 倒计时进度条、备注/自定义字段/目录；附件与密码历史各自折叠；按类型显示卡片/身份/SSH 密钥字段）。Bitwarden 里开了「重新验证」的条目不会自动出明文，需点「确认读取」。
+
+`accessMode` 为 `ask`/`auto` 时，详情底部多出「操作」区：归档 / 取消归档、移入回收站、恢复、移动到文件夹——每个操作都要再点一次「确认」，并在确认框里注明**面板操作不受 accessMode 门禁保护，请谨慎操作**（面板走的是已认证会话 RPC，没有逐次审批弹窗；模型工具的 `ask` 审批不受影响）。`readonly` 档下这些按钮不渲染，只显示一行说明。文件夹筛选只作用于当前页面已取到的条目，搜索与分页仍在整个库上跑。
 
 ## 对 Bitwarden/Vaultwarden 客户端约定的遵从
 
@@ -141,7 +143,7 @@ bitwarden_restore { "id": "…" }                        → 从回收站恢复�
 
 ```sh
 dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.4.0   # GitHub 源（首次需 allowBuilds）
+dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.5.0   # GitHub 源（首次需 allowBuilds）
 dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
 ```
 
@@ -150,7 +152,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地�
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 518 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 582 项）
 ```
 
 | 套件 | 覆盖 |
@@ -164,9 +166,9 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线�
 | `test/cache-store.test.mjs`（69） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件） |
 | `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
 | `test/host-entry.test.mjs`（27） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
-| `test/gateway-flow.test.mjs`（52） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 |
+| `test/gateway-flow.test.mjs`（67） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 / **读参数透传**（归档与回收站开关真正传到后端、回收站条目要 `includeTrashed` 才能读、`vw/folders` 返回解析后的对象）/ 写参数透传（归档、软删、恢复走通网关） |
 | `test/access-mode.test.mjs`（17） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（145） | 条目面板 + 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
+| `test/client-card.test.mjs`（194） | 条目面板 + **筛选行**（回收站 chip 计数与勾选、文件夹与归档筛选、清除筛选）+ **写操作**（归档/移入回收站/移动到文件夹与恢复的二次确认、`readonly` 档只读说明、回收站条目要 `includeTrashed`）+ **五类条目详情**（卡片掩码、身份字段、SSH 密钥、附件与密码历史折叠区）+ 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
 

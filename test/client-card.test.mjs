@@ -1314,6 +1314,263 @@ async function main() {
     noConn.renderer.unmount()
   })
 
+  // ── filters: trash chip, folder select, archive select ────────────────────
+  // v0.5.0: the trash became its own chip (a place, with a count) and the
+  // folder / archive policy became refinements of the list. The folder is
+  // filtered here, not on the host: the host ranks the whole vault and serves
+  // one window of it, so a folder folded into the read would make its counter
+  // measure a list the reader is not looking at.
+  {
+    const FILTER_ITEMS = [
+      { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: [], folder: '工作', folderId: 'folder-work', collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
+      { id: 'item-9', name: '未归类条目', type: 'login', username: 'nobody', uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
+      { id: 'item-7', name: '回收站条目', type: 'login', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false, trashed: true },
+    ]
+    const listArgs = []
+    const filterRpc = makeRpc({
+      status: () => ({ ok: true, value: { ...STATUS_REPORT, trashed: 2 } }),
+      folders: () => ({ ok: true, value: { folders: [{ id: 'folder-work', name: '工作', count: 1 }], total: 1, unfiled: 1, hint: 'folderList' } }),
+      list: (args) => {
+        listArgs.push(args)
+        return {
+          ok: true,
+          value: {
+            query: String(args.query ?? ''),
+            matched: FILTER_ITEMS.length,
+            returned: FILTER_ITEMS.length,
+            offset: 0,
+            hasMore: false,
+            vaultItems: FILTER_ITEMS.length,
+            items: FILTER_ITEMS,
+          },
+        }
+      },
+    })
+    const filterPanel = await mountPanel(mod, {}, filterRpc)
+    const nodeWith = (key, value = '') => filterPanel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const fRows = () => filterPanel.renderer.root.findAll((node) => node.props?.role === 'option')
+    const fText = () => JSON.stringify(filterPanel.renderer.toJSON())
+    const fSelects = () => filterPanel.renderer.root.findAllByType('select')
+    const chip = () => nodeWith('data-vw-trash-chip')[0]
+    const optionText = (select) => {
+      const list = Array.isArray(select.props.children) ? select.props.children : [select.props.children]
+      return list.filter(Boolean).map((node) => String(node.props?.children ?? '')).join(',')
+    }
+
+    check('the trash chip carries the trash count', String(chip().props.children) === '回收站 2', String(chip().props.children))
+    check('the trash chip is off by default', chip().props['aria-pressed'] === 'false', String(chip().props['aria-pressed']))
+    check('the filter row holds the folder and archive selects', fSelects().length === 2 && fSelects()[0].props['data-vw-folder'] === '' && fSelects()[1].props['data-vw-archive'] === '', String(fSelects().length))
+    check('the folder select starts on every folder, folder names included', fSelects()[0].props.value === '__all__' && optionText(fSelects()[0]).includes('工作'), optionText(fSelects()[0]))
+    check('an unfiltered view offers no clear button', nodeWith('data-vw-clear-filters').length === 0)
+
+    // The trash is a place, not a refinement: one click shows the deleted rows
+    // in the list, struck through and badged.
+    await act(async () => { chip().props.onClick() })
+    await flush()
+    check('the trash chip turns the trash view on', chip().props['aria-pressed'] === 'true', String(chip().props['aria-pressed']))
+    check('the trash view asks the host for trashed rows', listArgs.at(-1)?.includeTrashed === true, JSON.stringify(listArgs.at(-1)))
+    check('the trashed row is marked', fRows().length === 3 && fRows()[2].props['data-trashed'] === 'true', JSON.stringify(fRows().map((row) => row.props['data-trashed'])))
+    check('the trashed row is struck through', filterPanel.renderer.root.findAll((node) => node.props?.style?.textDecoration === 'line-through').length === 1)
+    check('the trashed row and the chip both carry the trash tooltip', filterPanel.renderer.root.findAll((node) => node.props?.title === '显示回收站条目（软删除，可恢复）').length === 2)
+    check('a filtered view offers the way back', nodeWith('data-vw-clear-filters').length === 1)
+
+    await act(async () => { nodeWith('data-vw-clear-filters')[0].props.onClick() })
+    await flush()
+    check('clearing turns the trash view off', chip().props['aria-pressed'] === 'false' && nodeWith('data-vw-clear-filters').length === 0)
+    check('clearing re-reads without trashed rows', listArgs.at(-1)?.includeTrashed === false, JSON.stringify(listArgs.at(-1)))
+
+    await act(async () => { fSelects()[0].props.onChange({ target: { value: 'folder-work' } }) })
+    await flush()
+    check('the folder select narrows the list to that folder', fRows().length === 1 && fText().includes('GitHub 工作账号') && !fText().includes('未归类条目'), 'rows=' + fRows().length)
+    check('the folder is filtered in the panel, not in the read', listArgs.at(-1)?.includeArchived === true && listArgs.at(-1)?.folderId === undefined, JSON.stringify(listArgs.at(-1)))
+
+    await act(async () => { fSelects()[1].props.onChange({ target: { value: 'hidden' } }) })
+    await flush()
+    check('the archive select drives the host read', listArgs.at(-1)?.includeArchived === false, JSON.stringify(listArgs.at(-1)))
+
+    await act(async () => { nodeWith('data-vw-clear-filters')[0].props.onClick() })
+    await flush()
+    check('clear resets every filter at once', fSelects()[0].props.value === '__all__' && fSelects()[1].props.value === 'with' && chip().props['aria-pressed'] === 'false')
+    await act(async () => { filterPanel.renderer.unmount() })
+  }
+
+  // ── write actions (accessMode=ask): every write is confirmed first ────────
+  {
+    const writes = []
+    const writeRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      folders: () => ({ ok: true, value: { folders: [{ id: 'folder-work', name: '工作', count: 1 }], total: 1, unfiled: 3, hint: 'folderList' } }),
+      update: (args) => {
+        writes.push({ method: 'update', args })
+        return { ok: true, value: { id: args.id, name: 'x', updated: true, revisionDate: '2026-10-06T00:00:00.000Z' } }
+      },
+      remove: (args) => {
+        writes.push({ method: 'remove', args })
+        return { ok: true, value: { id: args.id, deleted: true, permanent: false, hint: '条目已进入回收站，可用 bitwarden_restore 恢复' } }
+      },
+      restore: (args) => {
+        writes.push({ method: 'restore', args })
+        return { ok: true, value: { id: args.id, restored: true, revisionDate: '2026-10-06T00:00:00.000Z' } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, writeRpc)
+    const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const actionButtons = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-action'] !== undefined).map((node) => node.props['data-vw-action'])
+    const wText = () => JSON.stringify(panel.renderer.toJSON())
+    const wRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+
+    await act(async () => { wRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+
+    check('a writable panel offers archive, trash and move', actionButtons().sort().join(',') === 'archive,move,trash', actionButtons().join(','))
+
+    await act(async () => { nodeWith('data-vw-action', 'archive')[0].props.onClick() })
+    check('archive asks before writing', writes.length === 0 && nodeWith('data-vw-confirm').length === 1)
+    check('the confirmation names the action', wText().includes('确认归档该条目？归档后模型搜索默认不再返回它。'))
+    check('the confirmation repeats the gate warning', wText().includes('面板操作不受 accessMode 门禁保护，请谨慎操作。'))
+    await act(async () => { nodeWith('data-vw-confirm-ok')[0].props.onClick() })
+    await flush()
+    check('confirming archive writes archived=true', writes[0]?.method === 'update' && writes[0]?.args?.id === 'item-1' && writes[0]?.args?.input?.archived === true, JSON.stringify(writes[0]?.args))
+    check('the write reports itself done', wText().includes('已完成，正在刷新…'))
+
+    await act(async () => { nodeWith('data-vw-action', 'move')[0].props.onClick() })
+    check('move asks for a destination first', nodeWith('data-vw-move').length === 1 && writes.length === 1)
+    const moveSelect = () => panel.renderer.root.findAllByType('select')[0]
+    const moveOptions = () => {
+      const list = Array.isArray(moveSelect().props.children) ? moveSelect().props.children : [moveSelect().props.children]
+      return list.filter(Boolean).map((node) => String(node.props?.children ?? '')).join(',')
+    }
+    check('move offers no-move plus the folders', moveOptions().includes('不移动') && moveOptions().includes('工作'), moveOptions())
+    await act(async () => { moveSelect().props.onChange({ target: { value: 'folder-work' } }) })
+    await act(async () => { nodeWith('data-vw-move-ok')[0].props.onClick() })
+    check('the move confirmation names the destination', wText().includes('把该条目移动到「工作」？'))
+    await act(async () => { nodeWith('data-vw-confirm-ok')[0].props.onClick() })
+    await flush()
+    check('confirming move writes folderId', writes.at(-1)?.method === 'update' && writes.at(-1)?.args?.input?.folderId === 'folder-work', JSON.stringify(writes.at(-1)?.args))
+
+    await act(async () => { nodeWith('data-vw-action', 'move')[0].props.onClick() })
+    await act(async () => { nodeWith('data-vw-move-ok')[0].props.onClick() })
+    await act(async () => { nodeWith('data-vw-confirm-ok')[0].props.onClick() })
+    await flush()
+    check('moving out clears the folder with null', writes.at(-1)?.args?.input?.folderId === null, JSON.stringify(writes.at(-1)?.args))
+
+    await act(async () => { nodeWith('data-vw-action', 'trash')[0].props.onClick() })
+    check('trash asks before deleting', wText().includes('确认把该条目移入回收站？可在回收站中恢复。'))
+    await act(async () => { nodeWith('data-vw-confirm-ok')[0].props.onClick() })
+    await flush()
+    check('confirming trash calls remove with just the id', writes.at(-1)?.method === 'remove' && writes.at(-1)?.args?.id === 'item-1' && writes.at(-1)?.args?.permanent === undefined, JSON.stringify(writes.at(-1)?.args))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a trashed entry: read with includeTrashed, restore is the only action ──
+  {
+    const restoreCalls = []
+    const trashedRow = { id: 'item-7', name: '回收站条目', type: 'login', username: 'ghost', uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false, trashed: true }
+    const trashedRpc = makeRpc({
+      status: () => ({ ok: true, value: { ...STATUS_REPORT, trashed: 1 } }),
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      folders: () => ({ ok: true, value: { folders: [], total: 0, unfiled: 1, hint: 'folderList' } }),
+      list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [trashedRow] } }),
+      reveal: () => ({ ok: true, value: { id: 'item-7', name: '回收站条目', type: 'login', username: 'ghost', password: 'ghost-pass', trashed: true, deletedDate: '2026-10-01T00:00:00.000Z', collections: [] } }),
+      restore: (args) => {
+        restoreCalls.push(args)
+        return { ok: true, value: { id: args.id, restored: true, revisionDate: '2026-10-06T00:00:00.000Z' } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, trashedRpc)
+    const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    const actions = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-action'] !== undefined).map((node) => node.props['data-vw-action'])
+
+    await act(async () => { nodeWith('data-vw-trash-chip')[0].props.onClick() })
+    await flush()
+    await act(async () => { pRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+
+    const revealCall = trashedRpc.calls.filter((call) => call.method === 'reveal').at(-1)
+    check('reading a trashed entry asks for the trashed rows too', revealCall?.args?.includeTrashed === true, JSON.stringify(revealCall?.args))
+    check('the detail says the entry is in the trash', JSON.stringify(panel.renderer.toJSON()).includes('该条目在回收站中（软删除）'))
+    check('a trashed entry offers restore and nothing else', actions().join(',') === 'restore', actions().join(','))
+
+    await act(async () => { nodeWith('data-vw-action', 'restore')[0].props.onClick() })
+    check('restore asks first', restoreCalls.length === 0 && JSON.stringify(panel.renderer.toJSON()).includes('确认从回收站恢复该条目？'))
+    await act(async () => { nodeWith('data-vw-confirm-ok')[0].props.onClick() })
+    await flush()
+    check('confirming restore calls vw/restore with the id', restoreCalls[0]?.id === 'item-7', JSON.stringify(restoreCalls))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── typed entries: card / ssh-key projections, attachments, history ───────
+  {
+    const cardReveal = {
+      id: 'item-card', name: '公司信用卡', type: 'card', username: null,
+      card: { cardholderName: '张伟', brand: 'Visa', number: '4111111111111111', expMonth: '09', expYear: '2030', code: '123' },
+      attachments: [{ id: 'att-1', fileName: '合同.pdf', size: 2048, sizeName: '2 KB' }],
+      passwordHistory: [{ password: 'old-secret', lastUsedDate: '2026-01-01T00:00:00.000Z' }],
+      hasFido2: true,
+      uris: [], collections: [], folder: null,
+    }
+    const cardRpc = makeRpc({
+      list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-card', name: '公司信用卡', type: 'card', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }] } }),
+      reveal: () => ({ ok: true, value: cardReveal }),
+    })
+    const panel = await mountPanel(mod, {}, cardRpc)
+    const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const pText = () => JSON.stringify(panel.renderer.toJSON())
+    const pButtons = () => panel.renderer.root.findAllByType('button')
+    const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+
+    await act(async () => { pRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+
+    check('a card entry is labelled with its type', pText().includes('银行卡'))
+    check('the card number is masked to its last four', pText().includes('•••• •••• •••• 1111') && !pText().includes('4111111111111111'))
+    check('the passkey badge shows up', pText().includes('含通行密钥'))
+    await act(async () => { pButtons().find((node) => node.props.children === '显示').props.onClick() })
+    check('the card number reveals on demand', pText().includes('4111111111111111'))
+
+    check('attachments fold behind a header', nodeWith('data-vw-fold', 'attachments').length === 1 && pText().includes('附件（1）'))
+    await act(async () => { nodeWith('data-vw-fold', 'attachments')[0].props.onClick() })
+    check('the attachment list names the file, not a download', pText().includes('合同.pdf') && pText().includes('2 KB') && pText().includes('面板只显示附件信息，不下载内容'))
+    await act(async () => { nodeWith('data-vw-fold', 'history')[0].props.onClick() })
+    check('the password history is listed, masked', pText().includes('历史密码（1）') && pText().includes('最近使用：') && pText().includes('●●●●●●●●') && !pText().includes('old-secret'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+  {
+    const sshReveal = { id: 'item-ssh', name: '部署密钥', type: 'sshKey', sshKey: { publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI', keyFingerprint: 'SHA256:abc123', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----' }, uris: [], collections: [], folder: null }
+    const sshRpc = makeRpc({
+      list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-ssh', name: '部署密钥', type: 'sshKey', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }] } }),
+      reveal: () => ({ ok: true, value: sshReveal }),
+    })
+    const panel = await mountPanel(mod, {}, sshRpc)
+    const pText = () => JSON.stringify(panel.renderer.toJSON())
+    const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+
+    await act(async () => { pRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+
+    check('an ssh key is labelled with its type', pText().includes('SSH 密钥'))
+    check('the public key and fingerprint are shown in the clear', pText().includes('ssh-ed25519') && pText().includes('SHA256:abc123'))
+    check('the private key stays masked', pText().includes('●●●●●●●●') && !pText().includes('BEGIN OPENSSH'))
+    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '显示').props.onClick() })
+    check('the private key reveals on demand', pText().includes('BEGIN OPENSSH'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── readonly: the write block is replaced by the reason ───────────────────
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    await act(async () => { pRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    const roActions = panel.renderer.root.findAll((node) => node.props && node.props['data-vw-action'] !== undefined)
+    const roNote = panel.renderer.root.findAll((node) => node.props && node.props['data-vw-readonly'] === '')
+    check('readonly renders no write buttons', roActions.length === 0, String(roActions.length))
+    check('readonly explains the missing write actions', roNote.length === 1 && JSON.stringify(roNote[0].props.children).includes('当前为只读模式'), String(roNote.length))
+    check('readonly still renders the entry itself', JSON.stringify(panel.renderer.toJSON()).includes('octocat@example.com'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)

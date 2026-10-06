@@ -222,6 +222,71 @@ async function main() {
     check('reset() clears the live session', cleared?.authenticated === false, JSON.stringify(cleared))
   }
 
+  // ── read filters and write passthrough (the panel's v0.5.0 surface) ───────
+  // The panel reaches every one of these through `vw/*`; the host has to pass
+  // the view flags through untouched and hand back the same shapes the panel
+  // renders. This block also proves the write path end to end (archive, soft
+  // delete, restore) against the real mock server, and puts the fixture back
+  // the way the rest of the suite expects it.
+  {
+    const { gateway } = makeGateway(server.url, { serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD })
+    await gateway.connect(server.url, EMAIL, PASSWORD)
+    await gateway.submitTwoFactor(TWO_FACTOR_CODE, 0, true)
+
+    const baseline = await gateway.list('', 50)
+    check('the vault starts with four live entries', baseline?.items?.length === 4, String(baseline?.items?.length))
+
+    // Archive: the host keeps archived rows out of the default read, and the
+    // panel asks for them explicitly when its archive policy includes them.
+    const archived = await gateway.update('cipher-legacy', { archived: true })
+    check('update() archives an entry', archived?.updated === true && archived?.id === 'cipher-legacy', JSON.stringify(archived))
+    const liveOnly = await gateway.list('', 50, 0, false)
+    check('a live-only read drops the archived entry', liveOnly?.items?.length === 3 && !liveOnly.items.some((item) => item.id === 'cipher-legacy'), String(liveOnly?.items?.length))
+    const withArchived = await gateway.list('', 50, 0, true)
+    check('an archive-inclusive read keeps it', withArchived?.items?.length === 4, String(withArchived?.items?.length))
+
+    // Trash: soft delete moves the row out of the vault read unless the panel
+    // asks for the trash, and reading it back needs the same flag.
+    const removed = await gateway.remove('cipher-db')
+    check('remove() soft-deletes into the trash', removed?.deleted === true && removed?.permanent === false, JSON.stringify(removed))
+    check('remove() says how to undo it', /bitwarden_restore/.test(String(removed?.hint ?? '')), String(removed?.hint))
+
+    const hiddenTrash = await gateway.list('', 50, 0, true, false)
+    check('a read without the trash flag hides the trashed entry', hiddenTrash?.items?.length === 3 && !hiddenTrash.items.some((item) => item.id === 'cipher-db'), String(hiddenTrash?.items?.length))
+    const withTrash = await gateway.list('', 50, 0, true, true)
+    const trashedRow = withTrash?.items?.find((item) => item.id === 'cipher-db')
+    check('a trash-inclusive read returns the row marked trashed', Boolean(trashedRow) && trashedRow.trashed === true, JSON.stringify(withTrash?.items?.map((item) => item.id)))
+
+    // The read gate: a trashed entry is not readable by accident.
+    let readError = null
+    try {
+      await gateway.reveal('cipher-db')
+    } catch (error) {
+      readError = error
+    }
+    check('revealing a trashed entry is refused', readError?.code === 'trashed', String(readError?.code))
+    const readBack = await gateway.reveal('cipher-db', 'all', false, true)
+    check('revealing it with the trash flag works', /postgres:/.test(String(readBack?.notes ?? '')) && readBack?.trashed === true, JSON.stringify(readBack?.notes))
+
+    // Folders: the panel's move step and its folder filter both read this one
+    // call, and a string payload would render as `[object Object]` in the
+    // dropdown.
+    const folders = await gateway.folders()
+    check('folders() returns a parsed object, not a JSON string', Boolean(folders) && typeof folders === 'object' && Array.isArray(folders.folders), typeof folders)
+    check('folders() names the folder and counts the unfiled', folders?.folders?.some((folder) => folder.id === 'folder-work' && folder.name === '工作') === true && typeof folders?.unfiled === 'number', JSON.stringify(folders))
+
+    // Restore: the way back, and the panel's restore button.
+    const restored = await gateway.restore('cipher-db')
+    check('restore() brings the entry back', restored?.restored === true && restored?.id === 'cipher-db', JSON.stringify(restored))
+    const afterRestore = await gateway.list('', 50, 0, true, false)
+    check('a restored entry is live again', afterRestore?.items?.some((item) => item.id === 'cipher-db') === true, JSON.stringify(afterRestore?.items?.map((item) => item.id)))
+
+    // Put the fixture back the way the rest of the suite expects it.
+    await gateway.update('cipher-legacy', { archived: false })
+    const final = await gateway.list('', 50)
+    check('the fixture is back to four live entries', final?.items?.length === 4, String(final?.items?.length))
+  }
+
   // ── leaving the code screen mid-challenge keeps a live session ────────────
   {
     const { gateway } = makeGateway(server.url, { serverUrl: server.url, email: EMAIL, masterPassword: PASSWORD })
