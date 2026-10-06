@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **写回权限门禁下沉**：readonly 档的拒绝判断从工具包装层下沉到 `VaultMutations` 的 guard（`write_disabled`），工具层与网关层共用同一个判断；`ask` 档的审批流程不变。
 - **落盘缓存加完整性校验**：密文缓存用 HMAC-SHA256 签名（密钥 `~/.dsh/data/dsh-vaultwarden/cache.key`，0600，随机 32 字节），并严格比对服务器地址与邮箱；缓存版本升到 2，未签名、签名不符或账号不匹配的缓存一律丢弃重下。
 - **协议事实修正**：Vaultwarden 的 `/api/sync` 没有 `syncToken` 增量（1.37.3 的 `SyncData` 只有 `excludeDomains` 一个参数），"协议支持增量同步"的说法不成立；当前实现是"密文落盘缓存 + 13 字节修订号探针 + 需要时全量下载"。
+- **构建脚本修一处漏链**：`scripts/build.sh` 在两处 `npm install` 之后的补链只写了三个包，漏了 `@deepseek-ai/dsh-typert-protocol`；npm 会剪掉不是自己建立的符号链接，于是**全新检出**跑 build.sh 会在 host-entry 套件以 `ERR_MODULE_NOT_FOUND` 中断（本仓库工作区因为第一次链接没被剪过，一直没暴露）。改为把 peer 清单提成 `PEERS` 并用 `relink_peers()` 全量重链。
 
 ### 测试
 
