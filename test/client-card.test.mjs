@@ -457,6 +457,81 @@ async function main() {
   check('the reveal fixture carries the boolean, never a secret', REVEALS['item-1'].hasTotp === true && !('totpSecret' in REVEALS['item-1']))
   check('detail offers copy buttons', text().includes('复制'))
 
+  // ── the countdown is a ring that shrinks, and cools as it does ───────────
+  // Reported: the bar only moved once a second, and nothing said how urgent
+  // the remaining seconds were. It is now an arc that sweeps between ticks,
+  // with the seconds inside it. Then: the last seconds must read as red, so the
+  // tone is a ramp — green while the time is ample, cooling through orange, and
+  // landing on red. The stylesheet carries the sweep (and its reduced-motion
+  // opt-out); these checks pin the geometry, the ramp and the label.
+  {
+    // Node has no `CSS` global, so the mix path is opened explicitly here; the
+    // no-support fallback is checked separately below.
+    const savedCSS = globalThis.CSS
+    globalThis.CSS = { supports: () => true }
+    const ringWrapOf = (renderer) => renderer.root.findAll((node) => node.props?.role === 'img').find((node) => String(node.props?.['aria-label'] ?? '').includes('动态码剩余'))
+    const ringOf = (renderer) => renderer.root.findAllByType('circle').find((node) => node.props['data-vw-totp-ring'] !== undefined)
+    /** Everything written under one node — react-test-renderer nodes have no toJSON of their own. */
+    const textOf = (node) => {
+      const walk = (current) => {
+        if (current === null || current === undefined) return ''
+        if (typeof current === 'string' || typeof current === 'number') return String(current)
+        if (Array.isArray(current)) return current.map(walk).join('')
+        return walk(current.children)
+      }
+      return walk(node)
+    }
+    const offsets = []
+    const ladder = [
+      [24, ['--vw-ok'], 'still green'],
+      [12, ['color-mix', '--vw-ok', '--vw-warn'], 'cooling out of green'],
+      [3, ['color-mix', '--vw-err', '--vw-warn'], 'arriving at red'],
+    ]
+    for (const [seconds, expected, note] of ladder) {
+      const rpc = makeRpc({
+        totp: () => ({ ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: seconds, remaining: seconds, algorithm: 'SHA1' } } }),
+      })
+      const panel = await mountPanel(mod, {}, rpc)
+      await act(async () => {
+        optionRows(panel.renderer)[0].props.onClick()
+      })
+      await flush()
+      const wrap = ringWrapOf(panel.renderer)
+      const ring = ringOf(panel.renderer)
+      const offset = Number(ring?.props?.strokeDashoffset)
+      offsets.push(offset)
+      const stroke = String(ring?.props?.stroke)
+      check('with ' + seconds + 's left the ring is ' + note, Boolean(ring) && expected.every((part) => stroke.includes(part)), stroke)
+      check('with ' + seconds + 's left the arc has shortened accordingly', Math.abs(offset - 2 * Math.PI * 12 * (1 - seconds / 30)) < 0.05, 'offset=' + ring?.props.strokeDashoffset)
+      check('with ' + seconds + 's left the seconds sit inside the ring', textOf(wrap) === String(seconds) && String(wrap?.props['aria-label']).includes(String(seconds)), textOf(wrap) + ' / ' + String(wrap?.props['aria-label']))
+      await act(async () => {
+        panel.renderer.unmount()
+      })
+    }
+    check('the arc only ever grows shorter as the window closes', offsets[0] < offsets[1] && offsets[1] < offsets[2], JSON.stringify(offsets))
+
+    // A browser without color-mix() must snap to the nearer end of the ramp,
+    // never drop the stroke: an invisible arc reads as "no countdown at all".
+    if (savedCSS === undefined) delete globalThis.CSS
+    else globalThis.CSS = savedCSS
+    const plain = await mountPanel(mod, {}, makeRpc({
+      totp: () => ({ ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 12, remaining: 12, algorithm: 'SHA1' } } }),
+    }))
+    await act(async () => {
+      optionRows(plain.renderer)[0].props.onClick()
+    })
+    await flush()
+    const plainStroke = String(ringOf(plain.renderer)?.props?.stroke)
+    check('without color-mix() the ring snaps to the nearer tone instead of vanishing', plainStroke.includes('--vw-ok') || plainStroke.includes('--vw-warn'), plainStroke)
+    await act(async () => {
+      plain.renderer.unmount()
+    })
+
+    const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+    check('the sweep is declared, with a reduced-motion opt-out', source.includes('stroke-dashoffset 1s linear') && source.includes('prefers-reduced-motion: reduce'))
+    check('the ramp lands on the error token, not a third flat amber', source.includes('rampTone(TOKEN.warn, TOKEN.err') && !source.includes('--vw-amber'))
+  }
+
   const revealToggle = () => buttons().filter((node) => node.props.children === '显示')
   await act(async () => {
     revealToggle()[0].props.onClick()
