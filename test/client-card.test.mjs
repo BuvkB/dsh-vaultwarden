@@ -90,8 +90,12 @@ const STATUS_REPORT = {
   unlocked: true,
   items: ITEM_COUNT,
 }
+// A reveal payload carries no `totpSecret` — the host never sends it across the
+// boundary, only the boolean `hasTotp` (plus the computed `totp` on the 'totp'
+// field, stubbed below). The fixture used to carry a secret, which made the panel
+// look correct while every real entry showed a dash.
 const REVEALS = {
-  'item-1': { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', password: 'gh-p@ssw0rd-42', totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', uris: ['https://github.com/login'], notes: 'SSH 密钥在 CI 里', fields: [{ name: '租户', value: 'jindom' }], folder: '工作', collections: [] },
+  'item-1': { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', password: 'gh-p@ssw0rd-42', hasTotp: true, uris: ['https://github.com/login'], notes: 'SSH 密钥在 CI 里', fields: [{ name: '租户', value: 'jindom' }], folder: '工作', collections: [] },
   'item-3': { repromptRequired: true, id: 'item-3', name: '需要重新验证的条目', type: 'login' },
 }
 const CONFIRMED_REVEAL = { ...REVEALS['item-3'], repromptRequired: undefined, password: 'reprompt-pass-9', username: 'reprompt-user' }
@@ -381,6 +385,62 @@ async function main() {
     await sleep(350)
   })
 
+  // ── a keystroke must not blank the rows it is typed over ─────────────────
+  // Reported: every letter typed into the search box flashed the whole panel.
+  // The read a keystroke starts used to drop the list into a "loading" status,
+  // so the rows were replaced by a placeholder and the toolbar — carrying the
+  // search box the reader is typing into — was unmounted and remounted under
+  // the cursor. The read now lands on 'refreshing': the previous rows and the
+  // toolbar stay put until the answer arrives.
+  {
+    let releaseSearch = null
+    const slowSearchRpc = makeRpc({
+      list: (args) => {
+        const query = String(args.query ?? '')
+        const matched = query ? ITEMS.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = matched.slice(offset, offset + limit)
+        const payload = { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: ITEMS.length, items: page }
+        // The search read is held open: the test needs the moment where the
+        // reader has typed and the host has not answered yet.
+        if (query && !releaseSearch) {
+          return new Promise((resolve) => {
+            releaseSearch = () => resolve({ ok: true, value: payload })
+          })
+        }
+        return { ok: true, value: payload }
+      },
+    })
+    const panel = await mountPanel(mod, {}, slowSearchRpc)
+    const panelText = () => JSON.stringify(panel.renderer.toJSON())
+    const panelSearch = () => panel.renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    check('flicker setup: the whole vault is on screen first', optionRows(panel.renderer).length === ITEM_COUNT, `rows=${optionRows(panel.renderer).length}`)
+
+    await act(async () => {
+      panelSearch().props.onChange({ target: { value: '数' } })
+    })
+    // Past the debounce: the read is in flight and nothing has answered it.
+    await act(async () => {
+      await sleep(350)
+    })
+    check('flicker setup: the search read is in flight', typeof releaseSearch === 'function')
+    check('a keystroke leaves the previous rows on screen', optionRows(panel.renderer).length === ITEM_COUNT, `rows=${optionRows(panel.renderer).length}`)
+    check('a keystroke raises no loading placeholder over the rows', !panelText().includes('正在读取'), panelText().slice(0, 200))
+    check('the search box survives the read it started', Boolean(panelSearch()))
+    check('the panel says it is refreshing instead', panelText().includes('正在刷新'), panelText().slice(0, 200))
+
+    await act(async () => {
+      releaseSearch?.()
+    })
+    await flush()
+    check('the answer replaces the rows once it lands', optionRows(panel.renderer).length === 1 && panelText().includes('生产数据库口令'), `rows=${optionRows(panel.renderer).length}`)
+    check('the refreshing note goes away with the answer', !panelText().includes('正在刷新'))
+    await act(async () => {
+      panel.renderer.unmount()
+    })
+  }
+
   // selection → detail
   await act(async () => {
     rows()[0].props.onClick()
@@ -391,6 +451,10 @@ async function main() {
   check('selecting a row loads its detail over vw/reveal', text().includes('octocat@example.com'))
   check('password is masked until revealed', text().includes('●●●●●●●●') && !text().includes('gh-p@ssw0rd-42'))
   check('TOTP countdown renders the code', /\b123456\b/.test(text()))
+  // The panel is never handed a secret, only the host's boolean: the code above
+  // can only be on screen because the gate reads that flag and asks vw/totp.
+  check('the TOTP gate opens from the host flag alone', rpc.calls.some((call) => call.method === 'totp' && call.args.id === 'item-1'), JSON.stringify(rpc.calls.filter((call) => call.method === 'totp')))
+  check('the reveal fixture carries the boolean, never a secret', REVEALS['item-1'].hasTotp === true && !('totpSecret' in REVEALS['item-1']))
   check('detail offers copy buttons', text().includes('复制'))
 
   const revealToggle = () => buttons().filter((node) => node.props.children === '显示')
