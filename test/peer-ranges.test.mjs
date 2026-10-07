@@ -57,7 +57,7 @@ const PUBLISHED = {
     '0.1.5-alpha.1', '0.1.5-alpha.2', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.5-rc.3',
     '0.1.6-alpha.1', '0.1.6-alpha.2',
     '0.1.7-alpha.1', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2',
-    '0.2.0-rc.1', '0.2.0-rc.2',
+    '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1',
   ],
   '@deepseek-ai/dsh-typert-protocol': [
     '0.1.0-rc.2', '0.1.0-rc.3', '0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8',
@@ -67,15 +67,17 @@ const PUBLISHED = {
     '0.1.5-alpha.1', '0.1.5-alpha.2', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.5-rc.3',
     '0.1.6-alpha.1', '0.1.6-alpha.2',
     '0.1.7-alpha.1', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2',
-    '0.2.0-rc.1', '0.2.0-rc.2',
+    '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1',
   ],
   '@deepseek-ai/schemastery': [
     '3.18.1-rc.1', '3.18.1-rc.4',
     '3.18.1', '3.18.2', '3.18.3', '3.18.4',
+    '3.18.5-alpha.1',
   ],
   '@deepseek-ai/cordis': [
     '4.0.1-rc.1', '4.0.1-rc.4',
     '4.0.1', '4.0.2', '4.0.3', '4.0.4',
+    '4.0.5-alpha.1',
   ],
 }
 
@@ -148,8 +150,11 @@ function main() {
   }
 
   console.log('\nspecific builds the plugin must stay installable against')
-  // The harness the plugin is developed and verified against.
-  for (const version of ['0.1.0-rc.6', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2']) {
+  // The harness the plugin is developed and verified against. 0.2.1-alpha.1 is
+  // the build the local ~/.dsh-runtime ships; the string comparisons above pin
+  // every published build, this block pins the ones we actually open a session
+  // against by name, so a range edit that drops one of them fails loudly here.
+  for (const version of ['0.1.0-rc.6', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1']) {
     check(
       `@deepseek-ai/dsh-tools ${version} is admitted`,
       included(semver, peers['@deepseek-ai/dsh-tools'], version),
@@ -162,8 +167,18 @@ function main() {
     `range: ${peers['@deepseek-ai/schemastery']}`,
   )
   check(
+    '@deepseek-ai/schemastery 3.18.5-alpha.1 is admitted',
+    included(semver, peers['@deepseek-ai/schemastery'], '3.18.5-alpha.1'),
+    `range: ${peers['@deepseek-ai/schemastery']}`,
+  )
+  check(
     '@deepseek-ai/cordis 4.0.1-rc.1 is admitted',
     included(semver, peers['@deepseek-ai/cordis'], '4.0.1-rc.1'),
+    `range: ${peers['@deepseek-ai/cordis']}`,
+  )
+  check(
+    '@deepseek-ai/cordis 4.0.5-alpha.1 is admitted',
+    included(semver, peers['@deepseek-ai/cordis'], '4.0.5-alpha.1'),
     `range: ${peers['@deepseek-ai/cordis']}`,
   )
 

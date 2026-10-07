@@ -4,6 +4,21 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-10-07
+
+修两个面板缺陷（动态码、搜索闪烁），并把 peer 范围补到当前运行时。
+
+### 修复
+
+- **动态码恒显「—」**：详情页那行读的是 `value.totpSecret`，而种子的投影从不跨 RPC 边界（`totpSecret` 是投影内部字段），宿主也没在 `vw/reveal` 的 `all` 投影里给出任何「有没有第二因子」的信号——门永远为假，每个带动态码的条目都显示一个破折号。宿主现在随投影带一个布尔 `hasTotp`（种子仍在宿主内），面板据此开合该行。
+- **搜索框每敲一个字整块白屏**：按键触发的重查会把状态推回 `loading`，整个行列表被「正在读取」占位替换，工具栏（连同搜索框本身）跟着卸载——一次按键就是一次整页闪。现在加了 `refreshing` 状态：旧行留在屏幕上，工具栏与搜索框挂载一次就不再卸载，等答复落地再整体替换；计数格改为播报「正在刷新…」。
+
+### 测试
+
+- `test/client-card.test.mjs` 194 → 204 项：新增「按键不得清空列表」回归（挂起中的搜索请求期间旧行留屏、无占位、搜索框存活、刷新提示到位、答复落地后行被替换、提示消失），并要求 reveal 夹具只带 `hasTotp` 布尔、绝不带种子。
+- `test/peer-ranges.test.mjs` 31 → 34 项：**peer 范围补上 0.2.1 线与 3.18.5 / 4.0.5 预发布分支**。原先 `@deepseek-ai/cordis` 的 `>=4.0.1-rc.1 <5` 按 npm 的预发布规则并不放行运行时实际带的 `4.0.5-alpha.1`，`npm install` 路径会 `ERESOLVE`；`@deepseek-ai/dsh-tools` / `dsh-typert-protocol` 同样漏了 `^0.2.1-0`，`schemastery` 漏了 `^3.18.5-0`。四条范围现在各自接纳已发布的全部受支持构建，`0.0.1-rc.*` 与 `0.3.0`+ 仍被拒。
+- 十三套离线测试共 597 项全部通过。
+
 ## [0.5.1] — 2026-10-06
 
 修一处 v0.5.0 的排序回归：打开回收站筛选后，软删条目并没有像说明那样排在列表最前。
