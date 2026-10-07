@@ -1,13 +1,13 @@
 # 前端设计说明（dsh-vaultwarden 浏览器半边）
 
-> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（217 项，含 localStorage 快照、`vw/boot` 打桩、旧宿主拒绝分页参数回退整表并被记住、满额截断诚实提示、列表分页与分页游标校准、筛选行、写操作二次确认与只读档、五类条目详情）。
+> 对应代码：`lib/client.js`（条目浏览面板）、`lib/gateway.js`（Host 侧 `vw` 网关）、`test/client-card.test.mjs`（225 项，含 localStorage 快照、`vw/boot` 打桩、旧宿主拒绝分页参数回退整表并被记住、满额截断诚实提示、列表分页与分页游标校准、层级分区导航与分区缓存零 RPC、服务端图标与降级、验证码分区行、写操作二次确认与只读档、五类条目详情）。
 > 设计基线：与宿主设置页同水准；明暗双主题；仅 `--dsw-alias-*` 令牌；可访问性达标。
 
 ## 1. 一个界面，一个槽位
 
 | 界面 | 槽位 | 内容 |
 |---|---|---|
-| 条目浏览面板 | `settings.section`（id = `vaultwarden`，order 30） | 同步后的凭据列表 + 详情 + 复制 + TOTP 圆环倒计时 |
+| 条目浏览面板 | `settings.section`（id = `vaultwarden`，order 30） | 层级分区菜单（类型 / 文件夹 / 收藏 / 验证码 / 归档 / 回收站）+ 同步后的凭据列表 + 详情 + 复制 + TOTP 圆环倒计时 |
 | 配置表单 | 宿主从插件 `Config` schema 派生 | 服务器/账号/密钥/同步控制/权限档，密钥字段只写 |
 
 选型依据（`cordis_inspect_query` → Slots.listSubTree）：
@@ -37,6 +37,7 @@
 
 ```
 vw/status   配置/解锁/同步状态
+vw/overview 分区计数（全部/收藏/验证码/归档/回收站）+ 类型与文件夹分组（侧栏菜单用）
 vw/list     条目摘要（永不含密码；空查询=全量）
 vw/reveal   单条字段（reprompt 受 confirm 控制）
 vw/totp     当前 TOTP + 倒计时
@@ -44,7 +45,7 @@ vw/sync     强制同步
 vw/session · vw/reset · vw/discardChallenge  会话
 vw/boot     一次取回配置 + 会话 + 是否恢复（开面板用）
 vw/config · vw/configure · vw/connect · vw/twoFactor · vw/submitTwoFactor  配置与登录
-vw/list     includeArchived / includeTrashed 决定归档与回收站是否入列
+vw/list     section / sectionValue 选分区池（all/totp/type/folder/unfiled/favorites/archive/trash），宿主侧收窄后才计数与分页；includeArchived / includeTrashed 决定归档与回收站是否入列
 vw/reveal   includeTrashed 供回收站条目读取（否则报 trashed）
 vw/folders  文件夹 id + 名字 + 条目数 + 未归类条数
 vw/create · vw/update · vw/remove · vw/restore   写回（受 Config.accessMode 约束）
@@ -52,7 +53,7 @@ vw/create · vw/update · vw/remove · vw/restore   写回（受 Config.accessMo
 
 Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`）实现。纯 JS 无法使用装饰器语法
 （Node 22 不解析），标记由 `markRemote()` 按协议描述符格式在运行时打上，`remoteMethods()` 可回读验证
-（host-entry 测试即断言这 19 个线面方法）。配置表单不自绘：0.2.0 起宿主从插件 `Config` schema 派生
+（host-entry 测试即断言这 20 个线面方法）。配置表单不自绘：0.2.0 起宿主从插件 `Config` schema 派生
 （旧版的 `settingsScope` / `settings.plugin.item` 已移除，用它会导致前端整块不注册）。
 
 ## 3. 设计体系
@@ -78,9 +79,13 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 
 - **标题行**：`Bitwarden 凭据库` + 小字 `（支持 Bitwarden / Vaultwarden）`；标题本身保持短，兼容说明不喧宾夺主。
 - **工具行**：搜索框（占位符只说明搜什么；`/` 聚焦、Esc 清空、↑↓ 移动选中放在 tooltip——原先塞在占位符里，窄屏先被截断）、同步状态 chip（实时/轮询/关闭 + 连接圆点 + 相对同步时间）、条目总数、设置/刷新按钮组。
-- **窄屏（≤560px）**：搜索框独占一行；字段行由「92px 标签列 + 值」改为标签另起一行、值占满宽度（长 URL 不再挤成一列）；详情内边距与行高收紧。
-- **筛选行**（列表页、仅就绪态）：回收站 chip（带条数，勾选后列表并入回收站条目）+ 文件夹 select（全部文件夹/未归类/各文件夹）+ 归档 select（含归档/只看归档/隐藏归档）；任一项非默认时右侧出现「清除筛选」。筛选变化立即重查，首屏与分页参数（`includeArchived`/`includeTrashed`）随档位走；**文件夹筛选只过滤已取到的窗口**（宿主一次只给一窗，折进读取会让计数与游标错位），搜索与分页仍在全库上跑。
-- **列表**：行 = 中性首字母圆枕（取「名称 → 用户名 → URI 主机」中第一个**字母**，纯数字名如 IP 不再退化成同一个「1」）+ 名称 + 用户名·URI 截断 + 收藏星 + TOTP 徽标；归档条目带「已归档」徽标，回收站条目名称划掉、带「回收站」徽标（warn 色）；`role="listbox"`/`role="option"` + `aria-selected`；选中行用 bg-2 高亮。
+- **布局**：左「侧栏」+ 右「内容列」两栏；内容列在列表与条目详情之间切换（打开条目时列表让位给详情，列表上方留「‹ 返回列表」一行）。侧栏始终可见，不用手机那种「点进去就换屏」。
+  断点走 **CSS 容器查询**（`@container vw-panel`）而不是窗口宽度：宿主设置弹窗固定 800px 宽，其中约 280px 是设置导航，面板自己只剩 ~560px，用窗口宽度判断会永远判成「桌面」。
+  `<480px` 才把侧栏搬到顶部、钻取时藏侧栏；`<620px` 把字段行的标签列从 92px 收到 72px。不支持容器查询的浏览器回退到 `@supports not (container-type)` + 760px 窗口断点。
+- **分区菜单**（侧栏，计数来自 `vw/overview`）：全部条目 / 收藏 / 验证码 三行，然后是两组带标题的层级：类型 (n)（登录、安全笔记、银行卡、身份信息、SSH 密钥，按数量降序）与 文件夹 (n)（各文件夹 + 未归类），最后是 归档 与 回收站。点一行即把列表切成该分区的池子（`vw/list` 带 `section`/`sectionValue`，宿主侧收窄后才计数、才分页，因此计数与列表永远一致）；当前分区带 `aria-current` 高亮。
+- **分区缓存**：切回刚离开的分区时，若该分区快照在 5 分钟内（`SECTION_CACHE_MS`）就**直接重绘、零 RPC**；搜索、刷新按钮与写操作不走缓存（一律重查）。首次进入某分区仍是「先画后拉」。
+- **列表**：行 = 服务端缓存的站点图标（`<img>` 指向 `<serverUrl>/icons/<host>/icon.png`，主题无关、随服务器缓存；加载失败或像素小于 `ICON_MIN_PX = 24` 的行退回中性首字母圆枕，纯数字名如 IP 不会退化成同一个「1」）+ 名称 + 用户名·URI 截断 + 收藏星 + TOTP 徽标；归档条目带「已归档」徽标，回收站条目名称划掉、带「回收站」徽标（warn 色）；`role="listbox"`/`role="option"` + `aria-selected`；选中行用 bg-2 高亮。
+- **验证码分区行**（等于 m00193 的 App 形态）：图标 + 名称 + 用户名 + 30px 倒计时圆环（环心写剩余秒数）+ 6 位动态码（等宽、3+3 分组「686 029」）+ 右侧复制按钮（点它不打开条目）。动态码每秒只在这几行里请求。
 - **详情**：用户名/密码（默认掩码，显示/隐藏切换）/TOTP（30px 圆环倒计时，每秒请求、卸载清理定时器；剩余秒数写在环心，弧随剩余时间缩短，色从绿经橙渐变到红，`role="img"` + `aria-label` 报出秒数，`prefers-reduced-motion` 下不扫弧只跳格）/URI/目录/备注/自定义字段；每行复制按钮，成功 1.5 秒反馈（`aria-live`）。按类型投影：卡片（卡号掩码到后四位/持卡人/品牌/有效期/安全码）、身份（姓名/邮箱/电话/地址分组合并）、SSH 密钥（公钥与指纹明文、私钥掩码）；附件与密码历史各自折叠（附件只显示文件名与大小，不提供下载）；带通行密钥的条目显示徽标。回收站条目顶部有软删说明横幅，读取时带 `includeTrashed`。
 - **写操作**（`accessMode` 为 `ask`/`auto` 时）：详情底部「操作」区 = 归档/取消归档、移入回收站、恢复（仅回收站条目）、移动到文件夹；点任一操作先出确认框（文案随操作变化，注明**面板操作不受 accessMode 门禁保护，请谨慎操作**），确认后才发 `vw/update`/`vw/remove`/`vw/restore`。移动文件夹用独立小框（不移动 + 文件夹列表，取消发送 `folderId: null`）。`readonly` 档不渲染按钮，显示一行「当前为只读模式」。写入期间显示「正在写入…」，完成后就地提示并刷新。
 - **reprompt**：Bitwarden 开启「重新验证」的条目不出明文，显示锁形说明 + 「确认读取」按钮（带 `confirm: true` 再请求）。
@@ -102,6 +107,7 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 2. 一次 `vw/boot`：`{ config, resumed, session }`。Host 侧 `resumeSession()` 只读盘会话 + 必要时刷新 refresh token，**从不发起登录**（否则两步验证账号每次开面板都被拦）。
 3. 身份校验：快照的 `serverUrl + email` 与 `boot.config` 不一致 → 丢快照回到 `loading`；未配置 → 清快照进引导；`resumed: false` → 清快照进登录表单。
 4. 后台刷新：`vw/list` 与 `vw/status` **并行**发出，成功后回写两级缓存。列表按 `PAGE_SIZE = 50` 分页，向下滚动自动续读下一页；滑得比加载快时，尾部才出现「还有 N 条」按钮兜底。宿主拒绝分页参数时回退整表读取（上限 200），被上限截断时仍保留按钮。
+4b. 切分区：该分区快照在 `SECTION_CACHE_MS = 5 分钟` 内且确实换过分区 → 直接重绘，**零 RPC**；否则先画列表再补一次安静的后台读取（分页游标与「还有 N 条」状态随分区一起重置）。搜索、刷新按钮、写操作一律绕过缓存。
 
 **为什么要这种顺序**：凭据列表只含摘要（名称/类型/用户名/URI/目录/徽标），没有密码与 TOTP 明文，可以安全驻留 localStorage；
 快照按「服务器 + 邮箱」绑定，且在宿主报告登出时立即删除。宿主侧同时把「开一次面板」从两次串行 RPC 降为一次，列表与状态并行，
@@ -109,6 +115,6 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 
 ## 6. 自验
 
-- `node test/client-card.test.mjs`：217 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**筛选行（回收站 chip/文件夹/归档/清除）、写操作（归档/回收站/恢复/移动的二次确认与参数、readonly 只读说明、回收站条目 includeTrashed）、五类条目详情（卡片掩码/身份/SSH/附件与历史折叠）**、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**、**宿主拒绝 `vw/boot` 时报错而不误判旧宿主**、**列表分页：首屏 50 行、滚动续读、滑快出按钮、旧宿主拒绝分页参数后回退整表、页读失败保留列表、无布局度量不发请求、窗口漂移按宿主端点续读不重不漏、废弃列表迟到页被丢弃、满 200 上限截断改诚实提示且不再重试、拒绝分页的宿主下次打开直接整表**）、**按键不得清空列表**（刷新期间旧行留屏、搜索框不卸载、状态提示「正在刷新」、答复落地后行被替换）、**动态码圆环**（三档色令牌与 `stroke-dashoffset` 换算、环心秒数与 aria 标签、偏移随秒数递增、无 `color-mix()` 时取就近端点不丢描边、渐变终点落在 error 令牌）。
+- `node test/client-card.test.mjs`：225 项（模块加载器契约、9 字段、三分节、switch aria、secret 不回显、保存/清除、同步状态行、面板列表/搜索/详情/掩码/复制/repromise/TOTP/空状态、**层级分区导航（侧栏行与计数、分组标题、aria-current、进入分区带 section/sectionValue、切回命中快照零 RPC、老宿主无 `vw/overview` 时只剩「全部条目」一行）、服务端图标（`__setIcons` 命中出 `<img>`、`none` 退回字母圆枕）、验证码分区行（3+3 分组动态码、圆环、复制）、写操作（归档/回收站/恢复/移动的二次确认与参数、readonly 只读说明、回收站条目 includeTrashed）、五类条目详情（卡片掩码/身份/SSH/附件与历史折叠）**、**重载先从快照绘制而未登录即清快照**、`vw/boot` 一次 RPC 取代 config+session、**旧宿主（无 `vw/boot`）回退后仍开列表且不被要求登录**、**宿主拒绝 `vw/boot` 时报错而不误判旧宿主**、**列表分页：首屏 50 行、滚动续读、滑快出按钮、旧宿主拒绝分页参数后回退整表、页读失败保留列表、无布局度量不发请求、窗口漂移按宿主端点续读不重不漏、废弃列表迟到页被丢弃、满 200 上限截断改诚实提示且不再重试、拒绝分页的宿主下次打开直接整表**）、**按键不得清空列表**（刷新期间旧行留屏、搜索框不卸载、状态提示「正在刷新」、答复落地后行被替换）、**动态码圆环**（三档色令牌与 `stroke-dashoffset` 换算、环心秒数与 aria 标签、偏移随秒数递增、无 `color-mix()` 时取就近端点不丢描边、渐变终点落在 error 令牌）。
 - 主题合规：全部颜色经 `var(--vw-*, var(--dsw-alias-*, #fallback))`，无 var() fallback 之外的硬编码色值；无 opacity 压暗文字；`state-*` 不用于正文。
-- 明暗双主题截图已核对（`assets/panel-*.png` 三张，800×820：列表页、浅色详情页含写操作区、暗色详情页）。
+- 明暗双主题截图已核对（`assets/panel-*.png` 三张，800×820：侧栏分区 + 列表页、浅色详情页含写操作区、暗色详情页）。截图在真机 GUI 里拍（宿主自己那 800px 弹窗），因此侧栏宽度就是它在真实设置页里的宽度。
