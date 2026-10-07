@@ -93,6 +93,37 @@ async function main() {
   const beyond = await client.findEntries('', 2, 99)
   check('an out-of-range offset comes back empty and complete', beyond.items.length === 0 && beyond.hasMore === false, JSON.stringify({ items: beyond.items.length, hasMore: beyond.hasMore }))
 
+  // 3c. sidebar sections: one place at a time, counted the same way -----------
+  // The panel's navigation is an overview read plus one section read per visit.
+  // A badge and the list behind it must be the same number, which only holds if
+  // both narrow the pool the same way — that is what `section` guarantees.
+  const overview = await client.overview()
+  check('overview counts the whole vault from one read', overview.ciphers === 4 && overview.items === 4 && overview.archived === 0 && overview.trashed === 0, JSON.stringify(overview))
+  check('overview lists the cipher types in official-client order', overview.types.map((entry) => entry.id).join(',') === 'login,secureNote' && overview.types[0].count === 3, JSON.stringify(overview.types))
+  check('overview counts each folder and the unfiled entries', overview.folderList.some((folder) => folder.id === 'folder-work' && folder.count === 1) && overview.unfiled === 3, JSON.stringify(overview.folderList))
+  check('overview carries the places the panel badges', overview.sections.map((entry) => `${entry.id}:${entry.count}`).join(',') === 'all:4,favorites:1,totp:1,archive:0,trash:0', JSON.stringify(overview.sections))
+
+  const loginSection = await client.findEntries('', 50, 0, undefined, { section: 'type', sectionValue: 'login' })
+  check('a type section reads only that type', loginSection.matched === 3 && loginSection.items.every((item) => item.type === 'login'), JSON.stringify(loginSection.items.map((item) => item.id)))
+  check('a section badge and the section read agree', loginSection.matched === overview.types[0].count, `${loginSection.matched}/${overview.types[0].count}`)
+  const folderSection = await client.findEntries('', 50, 0, undefined, { section: 'folder', sectionValue: 'folder-work' })
+  check('a folder section reads that folder and nothing else', folderSection.matched === 1 && folderSection.items[0]?.id === 'cipher-github', JSON.stringify(folderSection.items.map((item) => item.id)))
+  const unfiledSection = await client.findEntries('', 50, 0, undefined, { section: 'unfiled' })
+  check('the unfiled section skips entries that have a folder', unfiledSection.matched === 3 && !unfiledSection.items.some((item) => item.id === 'cipher-github'), JSON.stringify(unfiledSection.items.map((item) => item.id)))
+  const totpSection = await client.findEntries('', 50, 0, undefined, { section: 'totp' })
+  check('the code section holds only entries with a TOTP secret', totpSection.matched === 1 && totpSection.items[0]?.hasTotp === true, JSON.stringify(totpSection.items.map((item) => item.id)))
+  const favoriteSection = await client.findEntries('', 2, 0, undefined, { section: 'favorites' })
+  check('a section pages inside itself', favoriteSection.matched === 1 && favoriteSection.hasMore === false, JSON.stringify({ matched: favoriteSection.matched, hasMore: favoriteSection.hasMore }))
+  const trashSection = await client.findEntries('', 50, 0, undefined, { section: 'trash' })
+  check('the trash section is empty until something is deleted', trashSection.matched === 0 && trashSection.vaultItems === 0, JSON.stringify(trashSection))
+  // The host memoises one findEntries answer, so the section has to be part of
+  // the key: otherwise opening the login section would hand the next unfiltered
+  // read three rows, or the model's search a folder's worth of entries.
+  const allAgain = await client.findEntries('', 50)
+  check('a section read does not leak into the unfiltered read', allAgain.matched === 4 && allAgain.items.some((item) => item.type === 'secureNote'), JSON.stringify(allAgain.items.map((item) => item.id)))
+  const repeatSection = await client.findEntries('', 50, 0, undefined, { section: 'type', sectionValue: 'login' })
+  check('a repeated section read still answers after other sections', repeatSection.matched === 3, String(repeatSection.matched))
+
   // 4. get by id / name / field ----------------------------------------------
   const byId = JSON.parse(await client.get('cipher-github', 'all'))
   check('get by id returns the credential', byId.password === 'gh-p@ssw0rd-42' && byId.username === 'octocat@jindom.cc')

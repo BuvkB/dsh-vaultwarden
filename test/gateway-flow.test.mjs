@@ -245,6 +245,23 @@ async function main() {
     const withArchived = await gateway.list('', 50, 0, true)
     check('an archive-inclusive read keeps it', withArchived?.items?.length === 4, String(withArchived?.items?.length))
 
+    // The sidebar's badges are read once (`vw/overview`) and each place is
+    // then opened with a section read. They describe the same pool only if
+    // the badge counts the live half the section read serves — an archived
+    // entry must not inflate a row that then hides it.
+    const overview = await gateway.overview()
+    const loginCount = overview?.types?.find((entry) => entry.id === 'login')?.count
+    const loginSection = await gateway.list('', 50, 0, false, false, 'type', 'login')
+    check('a type section reads only that type', loginSection?.matched === 2 && loginSection.items.every((item) => item.type === 'login'), JSON.stringify(loginSection?.items?.map((item) => item.id)))
+    check('a section badge counts the live half its read serves', loginCount === loginSection?.matched, `${loginCount}/${loginSection?.matched}`)
+    check('a section read never hands back an archived row', !loginSection.items.some((item) => item.id === 'cipher-legacy'), JSON.stringify(loginSection?.items?.map((item) => item.id)))
+    const folderSection = await gateway.list('', 50, 0, false, false, 'folder', 'folder-work')
+    check('a folder section narrows the pool to that folder', folderSection?.matched === 1 && folderSection.items[0]?.id === 'cipher-github', JSON.stringify(folderSection?.items?.map((item) => item.id)))
+    const unfiledSection = await gateway.list('', 50, 0, false, false, 'unfiled', null)
+    check('the unfiled section skips entries that have a folder', unfiledSection?.matched === 2 && !unfiledSection.items.some((item) => item.id === 'cipher-github'), JSON.stringify(unfiledSection?.items?.map((item) => item.id)))
+    const trashSection = await gateway.list('', 50, 0, false, true, 'trash', null)
+    check('the trash section holds only trashed rows', trashSection?.matched === 0, JSON.stringify(trashSection?.items?.map((item) => item.id)))
+
     // Trash: soft delete moves the row out of the vault read unless the panel
     // asks for the trash, and reading it back needs the same flag.
     const removed = await gateway.remove('cipher-db')

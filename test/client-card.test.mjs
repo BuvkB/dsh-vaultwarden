@@ -109,6 +109,30 @@ const SIGNED_OUT_SESSION = { configured: true, authenticated: false, pendingTwoF
 /** One `boot` answer, shaped the way the gateway returns it. */
 const bootWith = (config, resumed, session) => ({ ok: true, value: { config, resumed: Boolean(resumed), session } })
 
+/**
+ * The rows one sidebar place holds, narrowed the way the host narrows them.
+ *
+ * The host picks the pool first and scores and pages second, so the count it
+ * reports describes the place on screen. A stub that filtered after paging
+ * would make every badge a lie, and the panel checks below would pass against
+ * a host contract nobody serves.
+ */
+const sectionPool = (items, section, sectionValue, includeTrashed = false) => {
+  if (section === 'trash') return items.filter((item) => item.trashed === true)
+  if (section === 'archive') return items.filter((item) => item.archived === true)
+  const live = items.filter((item) => !item.archived && !item.trashed)
+  // The one place that mixes the two: 全部条目 asks for the trashed rows as
+  // well, and the host puts them in front of the live ones.
+  const extra = section === 'all' && includeTrashed ? items.filter((item) => item.trashed === true) : []
+  const value = sectionValue === undefined || sectionValue === null ? '' : String(sectionValue)
+  if (section === 'favorites') return [...extra, ...live.filter((item) => item.favorite === true)]
+  if (section === 'totp') return [...extra, ...live.filter((item) => item.hasTotp === true)]
+  if (section === 'type') return [...extra, ...live.filter((item) => String(item.type ?? 'login') === value)]
+  if (section === 'folder') return [...extra, ...live.filter((item) => String(item.folderId ?? '') === value || item.folder === value)]
+  if (section === 'unfiled') return [...extra, ...live.filter((item) => !item.folder && !item.folderId)]
+  return [...extra, ...live]
+}
+
 /** Build a stubbed `connection.rpc.call` over canned `vw/*` payloads. */
 function makeRpc(overrides = {}) {
   const calls = []
@@ -123,7 +147,8 @@ function makeRpc(overrides = {}) {
       if (method === 'list') {
         const args = payload?.args ?? {}
         const query = String(args.query ?? '')
-        const matchedItems = query ? ITEMS.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : ITEMS
+        const pool = sectionPool(ITEMS, String(args.section ?? 'all'), args.sectionValue, args.includeTrashed === true)
+        const matchedItems = query ? pool.filter((item) => `${item.name}${item.username ?? ''}`.includes(query)) : pool
         // Honour limit/offset the way the host does, so the paging scenarios
         // below exercise the real read contract rather than a full dump.
         const offset = Math.max(0, Number(args.offset) || 0)
@@ -137,8 +162,48 @@ function makeRpc(overrides = {}) {
             returned: page.length,
             offset,
             hasMore: offset + page.length < matchedItems.length,
-            vaultItems: ITEMS.length,
+            vaultItems: pool.length,
             items: page,
+          },
+        }
+      }
+      if (method === 'overview') {
+        // The sidebar's own read. Its counts are the host's, which is the whole
+        // reason the method exists: numbers taken from the page that happens to
+        // be loaded would describe a window, not a place.
+        const typeCounts = new Map()
+        for (const item of ITEMS) {
+          const id = String(item.type ?? 'login')
+          typeCounts.set(id, (typeCounts.get(id) ?? 0) + 1)
+        }
+        const live = ITEMS.filter((item) => !item.archived && !item.trashed)
+        const trashed = ITEMS.filter((item) => item.trashed === true).length
+        const archived = ITEMS.filter((item) => item.archived === true).length
+        const folderList = [{ id: 'folder-work', name: '工作', count: live.filter((item) => item.folder === '工作' || item.folderId === 'folder-work').length }]
+        return {
+          ok: true,
+          value: {
+            identity: `${CONFIG_VALUE.serverUrl}\u0000${CONFIG_VALUE.email}`,
+            ciphers: ITEMS.length,
+            items: live.length,
+            liveItems: live.length,
+            archived,
+            trashed,
+            folders: folderList.length,
+            folderCount: folderList.length,
+            unfiled: live.filter((item) => !item.folder && !item.folderId).length,
+            sections: [
+              { id: 'all', label: '全部条目', count: live.length },
+              { id: 'favorites', label: '收藏', count: live.filter((item) => item.favorite === true).length },
+              { id: 'totp', label: '验证码', count: live.filter((item) => item.hasTotp === true).length },
+              { id: 'archive', label: '归档', count: archived },
+              { id: 'trash', label: '回收站', count: trashed },
+            ],
+            types: [...typeCounts].map(([id, count]) => ({ id, label: id, count })),
+            folderList,
+            latestAt: null,
+            trashLatestAt: null,
+            updatedAt: new Date().toISOString(),
           },
         }
       }
@@ -1453,84 +1518,140 @@ async function main() {
     noConn.renderer.unmount()
   })
 
-  // ── filters: trash chip, folder select, archive select ────────────────────
-  // v0.5.0: the trash became its own chip (a place, with a count) and the
-  // folder / archive policy became refinements of the list. The folder is
-  // filtered here, not on the host: the host ranks the whole vault and serves
-  // one window of it, so a folder folded into the read would make its counter
-  // measure a list the reader is not looking at.
+  // ── the sidebar: one place at a time, counted by the host ─────────────────
+  // v0.6.0 replaced the flat filter row (trash chip, folder and archive
+  // selects) with a Bitwarden-App-style menu. A row is a place, not a
+  // refinement: stepping into one reads that place's pool on the host, so the
+  // badge and the list under it are the same number. That is also what lets a
+  // place be a cache entry instead of a fresh query every visit.
   {
-    const FILTER_ITEMS = [
-      { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: [], folder: '工作', folderId: 'folder-work', collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
-      { id: 'item-9', name: '未归类条目', type: 'login', username: 'nobody', uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
-      { id: 'item-7', name: '回收站条目', type: 'login', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false, trashed: true },
-    ]
+    const navRpc = makeRpc()
+    const baseCall = navRpc.call
     const listArgs = []
-    const filterRpc = makeRpc({
-      status: () => ({ ok: true, value: { ...STATUS_REPORT, trashed: 2 } }),
-      folders: () => ({ ok: true, value: { folders: [{ id: 'folder-work', name: '工作', count: 1 }], total: 1, unfiled: 1, hint: 'folderList' } }),
-      list: (args) => {
-        listArgs.push(args)
-        return {
-          ok: true,
-          value: {
-            query: String(args.query ?? ''),
-            matched: FILTER_ITEMS.length,
-            returned: FILTER_ITEMS.length,
-            offset: 0,
-            hasMore: false,
-            vaultItems: FILTER_ITEMS.length,
-            items: FILTER_ITEMS,
-          },
-        }
-      },
-    })
-    const filterPanel = await mountPanel(mod, {}, filterRpc)
-    const nodeWith = (key, value = '') => filterPanel.renderer.root.findAll((node) => node.props?.[key] === value)
-    const fRows = () => filterPanel.renderer.root.findAll((node) => node.props?.role === 'option')
-    const fText = () => JSON.stringify(filterPanel.renderer.toJSON())
-    const fSelects = () => filterPanel.renderer.root.findAllByType('select')
-    const chip = () => nodeWith('data-vw-trash-chip')[0]
-    const optionText = (select) => {
-      const list = Array.isArray(select.props.children) ? select.props.children : [select.props.children]
-      return list.filter(Boolean).map((node) => String(node.props?.children ?? '')).join(',')
+    navRpc.call = async (channel, endpoint, payload) => {
+      if (String(endpoint).replace(/^vw\//, '') === 'list') listArgs.push(payload?.args ?? {})
+      return baseCall(channel, endpoint, payload)
     }
+    const panel = await mountPanel(mod, {}, navRpc)
+    const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const navRows = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section'] !== undefined)
+    const navRow = (key) => navRows().find((node) => node.props['data-vw-section'] === key)
+    const navKeys = () => navRows().map((node) => node.props['data-vw-section'])
+    const navCount = (key) => String(navRow(key).props.children[2]?.props?.children)
+    const nRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    const nText = () => JSON.stringify(panel.renderer.toJSON())
 
-    check('the trash chip carries the trash count', String(chip().props.children) === '回收站 2', String(chip().props.children))
-    check('the trash chip is off by default', chip().props['aria-pressed'] === 'false', String(chip().props['aria-pressed']))
-    check('the filter row holds the folder and archive selects', fSelects().length === 2 && fSelects()[0].props['data-vw-folder'] === '' && fSelects()[1].props['data-vw-archive'] === '', String(fSelects().length))
-    check('the folder select starts on every folder, folder names included', fSelects()[0].props.value === '__all__' && optionText(fSelects()[0]).includes('工作'), optionText(fSelects()[0]))
-    check('an unfiltered view offers no clear button', nodeWith('data-vw-clear-filters').length === 0)
+    check('the sidebar is a landmark, not a list', nodeWith('data-vw-nav').length === 1 && nodeWith('data-vw-nav')[0].props['aria-label'] === '凭据库分区')
+    check(
+      'the sidebar offers every place the host counted',
+      navKeys().join(',') === 'all,favorites,totp,type:login,type:secureNote,folder:folder-work,unfiled,archive,trash',
+      navKeys().join(','),
+    )
+    check(
+      'each place carries the host count',
+      navCount('all') === '4' && navCount('favorites') === '1' && navCount('type:login') === '3' && navCount('folder:folder-work') === '1' && navCount('trash') === '0',
+      navKeys().map((key) => key + ':' + navCount(key)).join(','),
+    )
+    const groupHeads = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-nav-group'] !== undefined)
+    check(
+      'the two groups are headed and counted',
+      groupHeads().map((node) => String(node.props.children)).join('|') === '类型 (2)|文件夹 (1)',
+      groupHeads().map((node) => String(node.props.children)).join('|'),
+    )
+    check('the place on screen is marked current', navRow('all').props['aria-current'] === 'true' && navRow('totp').props['aria-current'] === undefined)
+    check('the sidebar rows are not entry rows', navKeys().every((key) => navRow(key).props.role === undefined))
 
-    // The trash is a place, not a refinement: one click shows the deleted rows
-    // in the list, struck through and badged.
-    await act(async () => { chip().props.onClick() })
+    await act(async () => { navRow('type:login').props.onClick() })
+    await flush(120)
+    check('stepping into a place reads that place on the host', listArgs.at(-1)?.section === 'type' && listArgs.at(-1)?.sectionValue === 'login', JSON.stringify(listArgs.at(-1)))
+    check('a place never drags in archived or deleted rows', listArgs.at(-1)?.includeArchived === false && listArgs.at(-1)?.includeTrashed === false, JSON.stringify(listArgs.at(-1)))
+    check('the list shows that place and nothing else', nRows().length === 3 && !nText().includes('生产数据库口令'), 'rows=' + nRows().length)
+    check('the place just entered becomes the current one', navRow('type:login').props['aria-current'] === 'true' && navRow('all').props['aria-current'] === undefined)
+
+    await act(async () => { navRow('trash').props.onClick() })
+    await flush(120)
+    check('the trash place asks the host for the deleted half', listArgs.at(-1)?.section === 'trash' && listArgs.at(-1)?.includeTrashed === true, JSON.stringify(listArgs.at(-1)))
+    check('an empty trash says which emptiness it is', nRows().length === 0 && nText().includes('回收站是空的'), 'rows=' + nRows().length)
+
+    // The whole point of the menu: a place the reader just left is still on
+    // screen. Nothing is asked again — not the list, not the boot.
+    const readsBefore = listArgs.length
+    await act(async () => { navRow('type:login').props.onClick() })
+    await flush(120)
+    check('stepping back into a place just left asks the host nothing', listArgs.length === readsBefore, readsBefore + ' → ' + listArgs.length)
+    check('the cached rows paint straight away', nRows().length === 3 && !nText().includes('生产数据库口令'), 'rows=' + nRows().length)
+
+    await act(async () => { navRow('type:login').props.onClick() })
+    await flush(120)
+    check('clicking the place already open changes nothing', listArgs.length === readsBefore)
+
+    await act(async () => { navRow('favorites').props.onClick() })
+    await flush(120)
+    check('the favorite place holds only the starred entry', listArgs.at(-1)?.section === 'favorites' && nRows().length === 1 && nText().includes('GitHub 工作账号'), 'rows=' + nRows().length)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the 验证码 place: rows you read, not rows you open ────────────────────
+  // A code and its copy control live on the row itself, so this one place
+  // trades the row <button> for a div carrying the same role and the same row
+  // contract — a nested button is invalid markup React refuses to build.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    const navRow = (key) => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section'] === key)[0]
+    await act(async () => { navRow('totp').props.onClick() })
+    await flush(120)
+    const tRows = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-row'] !== undefined)
+    const tCode = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-code'] !== undefined)[0]
+    const tCopy = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-copy'] !== undefined)[0]
+    const tRing = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-ring'] !== undefined)[0]
+
+    check('the code place holds exactly the entries with a secret', tRows().length === 1 && tRows()[0].props.role === 'option' && tRows()[0].props['data-row'] === '', 'rows=' + tRows().length)
+    check('the code is grouped three and three', String(tCode()?.props?.children) === '123 456', String(tCode()?.props?.children))
+    check('the row carries its own countdown ring', Boolean(tRing()))
+    check('the row offers a copy control', String(tCopy()?.props?.children) === '复制' && tCopy().props.title === '复制动态码', String(tCopy()?.props?.children))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── favicons: the server's icon when it has one, the tile otherwise ───────
+  // The server already caches site icons and answers at /icons/<host>/icon.png,
+  // so the panel renders an <img> straight away — and asks once per host
+  // whether there is one. The test double has no DOM, so the answer is preset.
+  {
+    mod.__setIcons({ 'github.com': 'ok', '10.0.0.10': 'none' })
+    const panel = await mountPanel(mod, {}, makeRpc())
     await flush()
-    check('the trash chip turns the trash view on', chip().props['aria-pressed'] === 'true', String(chip().props['aria-pressed']))
-    check('the trash view asks the host for trashed rows', listArgs.at(-1)?.includeTrashed === true, JSON.stringify(listArgs.at(-1)))
-    check('the trashed row is marked', fRows().length === 3 && fRows()[2].props['data-trashed'] === 'true', JSON.stringify(fRows().map((row) => row.props['data-trashed'])))
-    check('the trashed row is struck through', filterPanel.renderer.root.findAll((node) => node.props?.style?.textDecoration === 'line-through').length === 1)
-    check('the trashed row and the chip both carry the trash tooltip', filterPanel.renderer.root.findAll((node) => node.props?.title === '显示回收站条目（软删除，可恢复）').length === 2)
-    check('a filtered view offers the way back', nodeWith('data-vw-clear-filters').length === 1)
+    const imgs = () => panel.renderer.root.findAllByType('img')
+    const rows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    check(
+      'the server icon takes the tile when the host has one',
+      imgs().length === 1 && String(imgs()[0].props.src) === 'https://vault.example.com/icons/github.com/icon.png',
+      JSON.stringify(imgs().map((node) => node.props.src)),
+    )
+    check('the icon is decoration, not content', imgs()[0]?.props.alt === '')
+    check(
+      'a host the server has no icon for keeps its letter tile',
+      String(rows()[3].props.children[0].props.children) === 'D',
+      JSON.stringify(rows().map((row) => String(row.props.children[0].props.children))),
+    )
+    await act(async () => { panel.renderer.unmount() })
+    mod.__setIcons({})
+  }
 
-    await act(async () => { nodeWith('data-vw-clear-filters')[0].props.onClick() })
-    await flush()
-    check('clearing turns the trash view off', chip().props['aria-pressed'] === 'false' && nodeWith('data-vw-clear-filters').length === 0)
-    check('clearing re-reads without trashed rows', listArgs.at(-1)?.includeTrashed === false, JSON.stringify(listArgs.at(-1)))
-
-    await act(async () => { fSelects()[0].props.onChange({ target: { value: 'folder-work' } }) })
-    await flush()
-    check('the folder select narrows the list to that folder', fRows().length === 1 && fText().includes('GitHub 工作账号') && !fText().includes('未归类条目'), 'rows=' + fRows().length)
-    check('the folder is filtered in the panel, not in the read', listArgs.at(-1)?.includeArchived === true && listArgs.at(-1)?.folderId === undefined, JSON.stringify(listArgs.at(-1)))
-
-    await act(async () => { fSelects()[1].props.onChange({ target: { value: 'hidden' } }) })
-    await flush()
-    check('the archive select drives the host read', listArgs.at(-1)?.includeArchived === false, JSON.stringify(listArgs.at(-1)))
-
-    await act(async () => { nodeWith('data-vw-clear-filters')[0].props.onClick() })
-    await flush()
-    check('clear resets every filter at once', fSelects()[0].props.value === '__all__' && fSelects()[1].props.value === 'with' && chip().props['aria-pressed'] === 'false')
-    await act(async () => { filterPanel.renderer.unmount() })
+  // ── a host that cannot count: the sidebar degrades to one place ───────────
+  // vw/overview is newer than the rest of the host half. A page served by an
+  // older host must still open the vault, so the menu falls back to the one
+  // place that needs no counts at all rather than to a menu of guesses.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc({ overview: () => ({ ok: false, error: { code: 'not_found', message: 'vw.overview unknown' } }) }))
+    const navRows = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section'] !== undefined)
+    const rows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    check('an uncounted host still opens the vault', rows().length === ITEM_COUNT, 'rows=' + rows().length)
+    check(
+      'the sidebar degrades to the one place that needs no counts',
+      navRows().length === 1 && navRows()[0].props['data-vw-section'] === 'all',
+      JSON.stringify(navRows().map((node) => node.props['data-vw-section'])),
+    )
+    await act(async () => { panel.renderer.unmount() })
   }
 
   // ── write actions (accessMode=ask): every write is confirmed first ────────
@@ -1621,8 +1742,11 @@ async function main() {
     const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
     const actions = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-action'] !== undefined).map((node) => node.props['data-vw-action'])
 
-    await act(async () => { nodeWith('data-vw-trash-chip')[0].props.onClick() })
-    await flush()
+    // The trash is a place of its own now: the reader steps into it from the
+    // sidebar, and the read that follows is the one that asks for deleted rows.
+    const trashNav = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === 'trash')[0]
+    await act(async () => { trashNav().props.onClick() })
+    await flush(120)
     await act(async () => { pRows()[0].props.onClick() })
     await act(async () => { await sleep(50) })
 
