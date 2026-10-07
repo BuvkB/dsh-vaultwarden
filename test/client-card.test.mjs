@@ -1560,6 +1560,28 @@ async function main() {
     )
     check('the place on screen is marked current', navRow('all').props['aria-current'] === 'true' && navRow('totp').props['aria-current'] === undefined)
     check('the sidebar rows are not entry rows', navKeys().every((key) => navRow(key).props.role === undefined))
+    // The rail draws its marks now: one 16x16 SVG per row instead of a text
+    // glyph whose optical size depended on the host's font. The count stays the
+    // bare number — the chip is the style around it, never part of its text.
+    const navIcons = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section-icon'] !== undefined)
+    check('every place draws its own icon', navIcons().length === navKeys().length && navIcons().every((node) => String(node.props['data-vw-section-icon']).length > 0), JSON.stringify(navIcons().map((node) => node.props['data-vw-section-icon'])))
+    check(
+      'the icons are drawn, not typed: one svg per row',
+      navIcons().every((node) => node.children?.[0]?.type === 'svg' && node.children[0].props.viewBox === '0 0 16 16'),
+      JSON.stringify(navIcons().map((node) => node.children?.[0]?.type)),
+    )
+    check('the icons are decoration', navIcons().every((node) => node.children[0].props['aria-hidden'] === 'true'))
+    const countChips = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section-count'] !== undefined)
+    check(
+      'a count chip keeps the bare number inside its own box',
+      countChips().length === navKeys().length && countChips().every((node) => /^\d+$/.test(String(node.props.children)) && node.props.style.minWidth >= 22),
+      JSON.stringify(countChips().map((node) => String(node.props.children))),
+    )
+    check(
+      'the chip follows its row: the place in view inverts it',
+      navRow('all').props.children[2].props.style.background !== navRow('totp').props.children[2].props.style.background,
+      JSON.stringify([navRow('all').props.children[2].props.style.background, navRow('totp').props.children[2].props.style.background]),
+    )
 
     await act(async () => { navRow('type:login').props.onClick() })
     await flush(120)
@@ -1606,6 +1628,10 @@ async function main() {
     const tRing = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-ring'] !== undefined)[0]
 
     check('the code place holds exactly the entries with a secret', tRows().length === 1 && tRows()[0].props.role === 'option' && tRows()[0].props['data-row'] === '', 'rows=' + tRows().length)
+    // The row is a div, so it gets no UA border-box the way a button row does:
+    // without it the code row overflows the list by its own padding and the
+    // copy control is clipped at the panel edge (seen live at 390px and 800px).
+    check('the code row cannot outgrow the list it sits in', tRows()[0].props.style.boxSizing === 'border-box', String(tRows()[0].props.style.boxSizing))
     check('the code is grouped three and three', String(tCode()?.props?.children) === '123 456', String(tCode()?.props?.children))
     check('the row carries its own countdown ring', Boolean(tRing()))
     check('the row offers a copy control', String(tCopy()?.props?.children) === '复制' && tCopy().props.title === '复制动态码', String(tCopy()?.props?.children))
@@ -1635,6 +1661,55 @@ async function main() {
     )
     await act(async () => { panel.renderer.unmount() })
     mod.__setIcons({})
+  }
+
+  // ── the favicon arrives on its own: the probe must wake the row ───────────
+  // The block above presets the answer, which skips the one path that broke in
+  // the browser: `probeIcon` answers through a module-scope map, and a map is
+  // invisible to React. The version bump used to stop at the counter, so the
+  // row kept its letter tile until an unrelated re-render happened to come by —
+  // in practice, when the reader typed in the search box. So this case hands
+  // the module a real `Image` and fires its load event.
+  {
+    const loads = []
+    const savedImage = globalThis.Image
+    globalThis.Image = class {
+      constructor() { this.naturalWidth = 0; loads.push(this) }
+      set src(value) { this._src = value }
+      get src() { return this._src }
+    }
+    try {
+      mod.__setIcons({})
+      const panel = await mountPanel(mod, {}, makeRpc())
+      await flush()
+      const rows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+      const imgs = () => panel.renderer.root.findAllByType('img')
+      check('a host nobody has asked about yet keeps its letter tile', imgs().length === 0, 'imgs=' + imgs().length)
+      // One probe per host with a URI, not one per row: the two hosts in the
+      // fixture are asked about once each.
+      check(
+        'each host with a URI is asked about once',
+        loads.length === 2 && loads.filter((node) => String(node.src).includes('/icons/github.com/icon.png')).length === 1,
+        JSON.stringify(loads.map((node) => node.src)),
+      )
+      check('the letter tile is what the row shows meanwhile', String(rows()[0].props.children[0].props.children) === 'G')
+      // The server answered: the image loaded at a real icon size. Nothing else
+      // touches the panel between this line and the assertion below — that is
+      // the whole point of the check.
+      await act(async () => {
+        loads[0].naturalWidth = 72
+        loads[0].onload()
+      })
+      check(
+        'a probe answer repaints the row by itself, with no other change',
+        imgs().length === 1 && String(imgs()[0].props.src) === 'https://vault.example.com/icons/github.com/icon.png',
+        'imgs=' + imgs().length + ' src=' + JSON.stringify(imgs().map((node) => node.props.src)),
+      )
+      await act(async () => { panel.renderer.unmount() })
+    } finally {
+      globalThis.Image = savedImage
+      mod.__setIcons({})
+    }
   }
 
   // ── a host that cannot count: the sidebar degrades to one place ───────────
