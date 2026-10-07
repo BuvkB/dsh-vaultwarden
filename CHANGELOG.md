@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-10-07
+
+把动态码那行的 30 秒横条换成会缩短的圆环，并按剩余时间连续换色。
+
+### 变更
+
+- **动态码倒计时改为圆环**：详情页「动态码」一行右侧原先是一条 4px 横进度条加一个秒数——两段式读法，先看条再读秒。现在是一个 30px 的 SVG 圆环（r12、3.5px 描边、`stroke-dashoffset` 驱动），剩余秒数写在环心；环随剩余时间逐秒缩短，1 秒一格的 `stroke-dashoffset` 过渡让弧线扫过去而不是跳格。`role="img"` + `aria-label`「动态码剩余 N 秒」——颜色不是唯一信号；`prefers-reduced-motion` 下退化为逐格步进。
+- **颜色改为连续渐变，末端落到红**：三档色块（绿/橙/黄）换成 `rampTone()` 的两段插值——剩余 ≥50% 纯绿，50%→20% 用 `color-mix()` 从绿混到橙，20%→0 从橙混到红，最后一秒落在 `state-error` 令牌上。两侧都是 `var()` 链（明暗主题各自解析），JS 无法算色，所以交给 `color-mix()` 让浏览器插值；不支持 `color-mix()` 的浏览器取就近端点，而不是丢掉描边把环画没。
+
+### 测试
+
+- `test/client-card.test.mjs` 204 → 217 项：新增圆环回归（三档色令牌 `--vw-ok`/`--vw-warn`/`--vw-err`、`stroke-dashoffset` 与 `2πr` 的换算、环心秒数与 `aria-label`、偏移随秒数单调递增、样式表含 1s 线性过渡与 `prefers-reduced-motion` 覆盖），并要求不支持 `color-mix()` 时环色退化为就近端点而不是消失、渐变终点是 error 令牌而非第三种平色（反向守卫 `--vw-amber`）。
+- 十三套离线测试共 610 项全部通过。
+
 ## [0.5.2] — 2026-10-07
 
 修两个面板缺陷（动态码、搜索闪烁），并把 peer 范围补到当前运行时。
