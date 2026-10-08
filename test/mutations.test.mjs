@@ -79,8 +79,12 @@ async function main() {
     noteRaw?.secureNote?.type === 0,
     JSON.stringify(noteRaw?.secureNote),
   )
+  // `all` says a secure note exists but no longer hands over its body — for
+  // a note the body IS the secret. The caller has to name the field.
   const noteRead = JSON.parse(await client.get(note.id))
-  check('secure note reads back with its notes and folder', noteRead.notes === '多行\n备注' && noteRead.folderId === 'folder-work')
+  check('a secure note reports its type but not its body under all', noteRead.secureNote?.type === 0 && !('notes' in noteRead) && noteRead.folderId === 'folder-work', JSON.stringify(noteRead).slice(0, 160))
+  const noteBody = JSON.parse(await client.get(note.id, 'secureNote'))
+  check('the body comes back on field=secureNote', noteBody.secureNote?.notes === '多行\n备注', JSON.stringify(noteBody).slice(0, 160))
   check('secure note summary reports folderId (P0-6)', JSON.parse(await client.find('安全笔记 A')).items[0]?.folderId === 'folder-work')
 
   // 2. create validation ---------------------------------------------------------
@@ -113,7 +117,8 @@ async function main() {
   const noteUpdated = await mutations.update('cipher-db', { name: '生产数据库口令（已改名）' }, undefined)
   check('non-login item update is accepted', noteUpdated.updated === true, JSON.stringify(noteUpdated))
   const dbAfter = JSON.parse(await client.get('cipher-db'))
-  check('non-login update keeps notes and type', dbAfter.name === '生产数据库口令（已改名）' && /postgres:\/\//.test(dbAfter.notes ?? '') && dbAfter.type === 'secureNote', JSON.stringify(dbAfter).slice(0, 160))
+  const dbBody = JSON.parse(await client.get('cipher-db', 'secureNote'))
+  check('non-login update keeps notes and type', dbAfter.name === '生产数据库口令（已改名）' && /postgres:\/\//.test(dbBody.secureNote?.notes ?? '') && dbAfter.type === 'secureNote', JSON.stringify(dbAfter).slice(0, 160))
 
   const orgUpdated = await mutations.update('cipher-org', { password: 'org-rotated-1' }, undefined)
   check('organization item update is accepted', orgUpdated.updated === true, JSON.stringify(orgUpdated))

@@ -282,8 +282,11 @@ async function main() {
       readError = error
     }
     check('revealing a trashed entry is refused', readError?.code === 'trashed', String(readError?.code))
-    const readBack = await gateway.reveal('cipher-db', 'all', false, true)
-    check('revealing it with the trash flag works', /postgres:/.test(String(readBack?.notes ?? '')) && readBack?.trashed === true, JSON.stringify(readBack?.notes))
+    // `reveal` no longer takes a `confirm` argument (it would be a bypass for
+    // the re-prompt gate); the trash flag is now the third parameter. cipher-db
+    // is a secure note, so its body needs the field named too.
+    const readBack = await gateway.reveal('cipher-db', 'secureNote', true)
+    check('revealing it with the trash flag works', /postgres:/.test(String(readBack?.secureNote?.notes ?? '')) && readBack?.trashed === true, JSON.stringify(readBack))
 
     // Folders: the panel's move step and its folder filter both read this one
     // call, and a string payload would render as `[object Object]` in the

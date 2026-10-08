@@ -39,7 +39,9 @@
 vw/status   配置/解锁/同步状态
 vw/overview 分区计数（全部/收藏/验证码/归档/回收站）+ 类型与文件夹分组（侧栏菜单用）
 vw/list     条目摘要（永不含密码；空查询=全量）
-vw/reveal   单条字段（reprompt 受 confirm 控制）
+vw/reveal   单条字段；field 默认 all（窄字段需点名 card / identity / secureNote / sshKey / totp）；reprompt 条目只有在 authorizeReprompt 开过时间窗后才返回明文
+vw/authorizeReprompt  面板内输入主密码 → 比对会话主密钥 → 开一个纯内存时间窗（默认 5 分钟），并把刚解锁的条目一并回传
+vw/repromptGrant  轮询剩余解锁时间（仅当门正在屏幕上时）
 vw/totp     当前 TOTP + 倒计时
 vw/sync     强制同步
 vw/session · vw/reset · vw/discardChallenge  会话
@@ -94,13 +96,14 @@ Host 侧由 `lib/gateway.js`（`TypertRemoteService` 子类，命名空间 `vw`�
 - **验证码分区行**（等于 m00193 的 App 形态）：图标 + 名称 + 用户名 + 30px 倒计时圆环（环心写剩余秒数）+ 6 位动态码（等宽、3+3 分组「686 029」）+ 右侧复制按钮（点它不打开条目）。动态码每秒只在这几行里请求。
 - **详情**：用户名/密码（默认掩码，显示/隐藏切换）/TOTP（30px 圆环倒计时，每秒请求、卸载清理定时器；剩余秒数写在环心，弧随剩余时间缩短，色从绿经橙渐变到红，`role="img"` + `aria-label` 报出秒数，`prefers-reduced-motion` 下不扫弧只跳格）/URI/目录/备注/自定义字段；每行复制按钮，成功 1.5 秒反馈（`aria-live`）。按类型投影：卡片（卡号掩码到后四位/持卡人/品牌/有效期/安全码）、身份（姓名/邮箱/电话/地址分组合并）、SSH 密钥（公钥与指纹明文、私钥掩码）；附件与密码历史各自折叠（附件只显示文件名与大小，不提供下载）；带通行密钥的条目显示徽标。回收站条目顶部有软删说明横幅，读取时带 `includeTrashed`。
 - **写操作**（`accessMode` 为 `ask`/`auto` 时）：详情底部「操作」区 = 归档/取消归档、移入回收站、恢复（仅回收站条目）、移动到文件夹；点任一操作先出确认框（文案随操作变化，注明**面板操作不受 accessMode 门禁保护，请谨慎操作**），确认后才发 `vw/update`/`vw/remove`/`vw/restore`。移动文件夹用独立小框（不移动 + 文件夹列表，取消发送 `folderId: null`）。`readonly` 档不渲染按钮，显示一行「当前为只读模式」。写入期间显示「正在写入…」，完成后就地提示并刷新。
-- **reprompt**：Bitwarden 开启「重新验证」的条目不出明文，显示锁形说明 + 「确认读取」按钮（带 `confirm: true` 再请求）。
+- **reprompt**：Bitwarden 开启「重新验证」的条目不出明文，**任何字段都不出**。详情里是锁形说明 + **主密码输入框** + 「输入主密码解锁」（回车即提交），输错留在原地报错。这道门没有布尔旁路：`reveal` 不收 `confirm`，解锁只能由 `vw/authorizeReprompt` 打开，时间窗（默认 5 分钟）内整条可读，窗在面板上以「已解锁 N 分钟」显示。
+- **窄字段按需读取**：`all` 只给存在位（`hasCard` / `hasIdentity` / `hasSshKey`，SSH 另给指纹）。详情渲染成「含银行卡 · 读取这一项」一行，点一下才发一次 `vw/reveal { field: 'card' }`，取回的行替换那一行；切换条目时这些窄字段状态一并清空。
 - **空状态**：未配置（引导去卡片补全）/ 加载失败（错误 + hint + 重试）/ 无匹配（换词提示）/ 未选中（引导选条目）。
 
 ## 5. 安全姿态
 
 - 列表数据（`vw/list`）永不返回密码；密码只在用户主动打开条目并点「显示」后出现，且只进 DOM。
-- reprompt 条目遵循 Bitwarden 官方客户端约定，不自动解密展示，需显式 `confirm`。
+- reprompt 条目遵循 Bitwarden 官方客户端约定，不自动解密展示，且**只能由本人在面板输入主密码解锁**——工具面没有、也不该有能绕过它的参数（v0.6.x 的 `confirm: true` 已删除）。
 - 主密码/API secret 在宿主派生的表单里是只写字段（留空=不修改），已存值不回显。
 - 面板所有数据走 `/api` connection RPC —— 该通道自带操作者鉴权，插件不注册任何自有 HTTP 路由。
 

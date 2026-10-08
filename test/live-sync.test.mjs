@@ -125,8 +125,20 @@ async function main() {
   // 6. Bitwarden reprompt convention -------------------------------------------
   const reprompt = JSON.parse(await client.get('cipher-reprompt'))
   check('reprompt item is not auto-revealed', reprompt.repromptRequired === true && !('password' in reprompt), JSON.stringify(reprompt))
-  const confirmed = JSON.parse(await client.get('cipher-reprompt', 'password', undefined, { confirm: true }))
-  check('reprompt item reveals with explicit confirm', confirmed.password === 'reprompt-pass-9')
+  // `confirm: true` used to be the way in. It is gone on purpose: a flag the
+  // caller sets itself is a flag the caller can also set by accident. Only the
+  // master password typed by the user in the panel opens this entry.
+  const flag = JSON.parse(await client.get('cipher-reprompt', 'password', undefined, { confirm: true }))
+  check('a confirm flag no longer opens the gate', flag.repromptRequired === true && !('password' in flag), JSON.stringify(flag))
+  const wrong = await client.authorizeReprompt('not the master password')
+  check('a wrong master password is refused', wrong.authorized === false)
+  check('a refused check leaves the gate shut', JSON.parse(await client.get('cipher-reprompt', 'password')).repromptRequired === true)
+  const ok = await client.authorizeReprompt(PASSWORD)
+  check('the master password opens the gate', ok.authorized === true && ok.remainingMs > 0, JSON.stringify(ok))
+  const granted = JSON.parse(await client.get('cipher-reprompt', 'password'))
+  check('a verified entry reveals', granted.password === 'reprompt-pass-9', JSON.stringify(granted))
+  const notes = JSON.parse(await client.get('cipher-reprompt', 'notes'))
+  check('the gate covers notes too', !notes.repromptRequired, JSON.stringify(notes))
 
   // 7. stable, deterministic device identity ------------------------------------
   const ids = new Set(server.stats.deviceIdentifiers)

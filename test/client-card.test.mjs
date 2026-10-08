@@ -226,8 +226,18 @@ function makeRpc(overrides = {}) {
       }
       if (method === 'reveal') {
         const args = payload?.args ?? {}
-        if (args.id === 'item-3' && args.confirm) return { ok: true, value: CONFIRMED_REVEAL }
+        // No `confirm` shortcut any more: the panel reaches a reprompt entry
+        // through `authorizeReprompt`, which hands the view back with the
+        // unlock, so `reveal` never sees the password for item-3.
         return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
+      }
+      if (method === 'repromptGrant') return { ok: true, value: { granted: false, remainingMs: 0 } }
+      if (method === 'authorizeReprompt') {
+        const args = payload?.args ?? {}
+        if (args.password !== 'correct horse battery staple') {
+          return { ok: true, value: { authorized: false, message: '主密码不对' } }
+        }
+        return { ok: true, value: { authorized: true, remainingMs: 300000, grantMinutes: 5, view: CONFIRMED_REVEAL } }
       }
       if (method === 'totp') return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 20, remaining: 20, algorithm: 'SHA1' } } }
       if (method === 'config') return { ok: true, value: CONFIG_VALUE }
@@ -637,15 +647,31 @@ async function main() {
     await sleep(50)
   })
   check('reprompt entry is gated with an explanation', text().includes('重新验证') && !text().includes('reprompt-pass-9'))
-  const confirmButton = () => buttons().find((node) => node.props.children === '确认读取')
+  // The panel asks for the master password; a wrong one leaves the gate shut.
+  const masterInput = () => renderer.root.findAllByType('input').find((node) => node.props.type === 'password')
+  const confirmButton = () => buttons().find((node) => node.props.children === '输入主密码解锁')
+  check('the gate asks for the master password', Boolean(masterInput()) && Boolean(confirmButton()))
+  await act(async () => {
+    masterInput().props.onInput({ target: { value: 'wrong password' } })
+  })
   await act(async () => {
     confirmButton().props.onClick()
   })
   await act(async () => {
     await sleep(50)
   })
-  check('confirm reads the reprompt entry through vw/reveal', text().includes('reprompt-pass-9'))
-  check('confirm travels as a boolean', rpc.calls.some((call) => call.method === 'reveal' && call.args.confirm === true))
+  check('a wrong master password is reported and reveals nothing', text().includes('主密码不对') && !text().includes('reprompt-pass-9'))
+  await act(async () => {
+    masterInput().props.onInput({ target: { value: 'correct horse battery staple' } })
+  })
+  await act(async () => {
+    confirmButton().props.onClick()
+  })
+  await act(async () => {
+    await sleep(50)
+  })
+  check('the master password reads the reprompt entry', text().includes('reprompt-pass-9'))
+  check('the unlock goes through vw/authorizeReprompt, never a reveal flag', rpc.calls.some((call) => call.method === 'authorizeReprompt') && !rpc.calls.some((call) => call.method === 'reveal' && call.args.confirm === true))
   await act(async () => {
     renderer.unmount()
   })
@@ -1407,8 +1433,8 @@ async function main() {
     badPassword.renderer.unmount()
   })
 
-  // ── a late "confirm read" must not land on another entry ──────────────────
-  // Reported: select a reprompt entry, click 确认读取, then move to a different
+  // ── a late unlock answer must not land on another entry ───────────────────
+  // Reported: select a reprompt entry, unlock it, then move to a different
   // entry before the host answers. The late answer painted the first entry's
   // plaintext password into the second entry's pane and left the reveal flag
   // set, so that second entry's own password would show the moment it loaded.
@@ -1416,32 +1442,35 @@ async function main() {
     let releaseConfirm = null
     const raceRpc = makeRpc({
       reveal: (args) => {
-        if (args.id === 'item-3' && args.confirm) {
-          return new Promise((resolve) => {
-            releaseConfirm = () => resolve({ ok: true, value: CONFIRMED_REVEAL })
-          })
-        }
         if (args.id === 'item-4') {
           return { ok: true, value: { id: 'item-4', name: '10.0.0.10', type: 'login', username: 'demo-user', password: 'demo-pass-4', uris: [], fields: [] } }
         }
         return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
       },
+      authorizeReprompt: () =>
+        new Promise((resolve) => {
+          releaseConfirm = () => resolve({ ok: true, value: { authorized: true, remainingMs: 300000, grantMinutes: 5, view: CONFIRMED_REVEAL } })
+        }),
     })
     const race = await mountPanel(mod, {}, raceRpc)
     const raceText = () => JSON.stringify(race.renderer.toJSON())
     const raceButtons = () => race.renderer.root.findAllByType('button')
     const raceRows = () => raceButtons().filter((node) => node.props.role === 'option')
-    const raceSearch = () => race.renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
+    const raceInputs = () => race.renderer.root.findAllByType('input')
+    const raceSearch = () => raceInputs().find((node) => node.props.type === 'search')
     await act(async () => {
       raceRows()[2].props.onClick()
     })
     await flush()
     check('race setup: the reprompt entry is gated', raceText().includes('重新验证') && !raceText().includes('reprompt-pass-9'))
     await act(async () => {
-      raceButtons().find((node) => node.props.children === '确认读取').props.onClick()
+      raceInputs().find((node) => node.props.type === 'password').props.onInput({ target: { value: 'correct horse battery staple' } })
+    })
+    await act(async () => {
+      raceButtons().find((node) => node.props.children === '输入主密码解锁').props.onClick()
     })
     await flush()
-    check('race setup: the confirm is in flight', typeof releaseConfirm === 'function')
+    check('race setup: the unlock is in flight', typeof releaseConfirm === 'function')
     // The toolbar stays mounted while the detail pane loads, so the keyboard
     // shortcut moves the selection without a trip through the list.
     check('race setup: the search box is still mounted', Boolean(raceSearch()))
@@ -1954,17 +1983,20 @@ async function main() {
 
   // ── typed entries: card / ssh-key projections, attachments, history ───────
   {
+    // `all` no longer carries the card body: it says a card is there and the
+    // panel has to ask for `field: 'card'` before the number is on screen.
     const cardReveal = {
       id: 'item-card', name: '公司信用卡', type: 'card', username: null,
-      card: { cardholderName: '张伟', brand: 'Visa', number: '4111111111111111', expMonth: '09', expYear: '2030', code: '123' },
+      hasCard: true,
       attachments: [{ id: 'att-1', fileName: '合同.pdf', size: 2048, sizeName: '2 KB' }],
       passwordHistory: [{ password: 'old-secret', lastUsedDate: '2026-01-01T00:00:00.000Z' }],
       hasFido2: true,
       uris: [], collections: [], folder: null,
     }
+    const cardBody = { id: 'item-card', name: '公司信用卡', type: 'card', card: { cardholderName: '张伟', brand: 'Visa', number: '4111111111111111', expMonth: '09', expYear: '2030', code: '123' } }
     const cardRpc = makeRpc({
       list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-card', name: '公司信用卡', type: 'card', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }] } }),
-      reveal: () => ({ ok: true, value: cardReveal }),
+      reveal: (args) => ({ ok: true, value: args.field === 'card' ? cardBody : cardReveal }),
     })
     const panel = await mountPanel(mod, {}, cardRpc)
     const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
@@ -1976,8 +2008,13 @@ async function main() {
     await act(async () => { await sleep(50) })
 
     check('a card entry is labelled with its type', pText().includes('银行卡'))
-    check('the card number is masked to its last four', pText().includes('•••• •••• •••• 1111') && !pText().includes('4111111111111111'))
+    check('opening a card entry does not hand over the card body', pText().includes('含银行卡') && !pText().includes('4111111111111111') && !pText().includes('张伟'))
     check('the passkey badge shows up', pText().includes('含通行密钥'))
+    await act(async () => { pButtons().find((node) => node.props.children === '读取这一项').props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('the card body arrives only when that field is asked for', cardRpc.calls.some((call) => call.method === 'reveal' && call.args.field === 'card'))
+    check('the card number is masked to its last four', pText().includes('•••• •••• •••• 1111') && !pText().includes('4111111111111111'))
+    check('the cardholder name shows in the clear', pText().includes('张伟'))
     await act(async () => { pButtons().find((node) => node.props.children === '显示').props.onClick() })
     check('the card number reveals on demand', pText().includes('4111111111111111'))
 
@@ -1989,10 +2026,14 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
   {
-    const sshReveal = { id: 'item-ssh', name: '部署密钥', type: 'sshKey', sshKey: { publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI', keyFingerprint: 'SHA256:abc123', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----' }, uris: [], collections: [], folder: null }
+    // Same shape for an SSH key: `all` gives the fingerprint (a public
+    // handle, not the material) and the panel fetches `field: 'sshKey'` for
+    // the private half.
+    const sshReveal = { id: 'item-ssh', name: '部署密钥', type: 'sshKey', hasSshKey: true, sshKeyFingerprint: 'SHA256:abc123', uris: [], collections: [], folder: null }
+    const sshBody = { id: 'item-ssh', name: '部署密钥', type: 'sshKey', sshKey: { publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI', keyFingerprint: 'SHA256:abc123', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----' } }
     const sshRpc = makeRpc({
       list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-ssh', name: '部署密钥', type: 'sshKey', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }] } }),
-      reveal: () => ({ ok: true, value: sshReveal }),
+      reveal: (args) => ({ ok: true, value: args.field === 'sshKey' ? sshBody : sshReveal }),
     })
     const panel = await mountPanel(mod, {}, sshRpc)
     const pText = () => JSON.stringify(panel.renderer.toJSON())
@@ -2002,7 +2043,10 @@ async function main() {
     await act(async () => { await sleep(50) })
 
     check('an ssh key is labelled with its type', pText().includes('SSH 密钥'))
-    check('the public key and fingerprint are shown in the clear', pText().includes('ssh-ed25519') && pText().includes('SHA256:abc123'))
+    check('opening an ssh entry shows the fingerprint but not the key material', pText().includes('SHA256:abc123') && !pText().includes('BEGIN OPENSSH') && !pText().includes('ssh-ed25519'))
+    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '读取这一项').props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('the public key is shown in the clear once the field is read', pText().includes('ssh-ed25519'))
     check('the private key stays masked', pText().includes('●●●●●●●●') && !pText().includes('BEGIN OPENSSH'))
     await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '显示').props.onClick() })
     check('the private key reveals on demand', pText().includes('BEGIN OPENSSH'))

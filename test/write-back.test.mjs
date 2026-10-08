@@ -121,8 +121,10 @@ async function main() {
     readError = error
   }
   check('a trashed item refuses a silent read', readError?.code === 'trashed', readError?.code)
-  const readTrashed = JSON.parse(await client.get('cipher-db', 'all', undefined, { includeTrashed: true }))
-  check('includeTrashed reads it on purpose', /postgres:\/\//.test(readTrashed.notes ?? ''))
+  // cipher-db is a secure note, so its body now lives behind
+  // `field: 'secureNote'` — `all` reports the type only.
+  const readTrashed = JSON.parse(await client.get('cipher-db', 'secureNote', undefined, { includeTrashed: true }))
+  check('includeTrashed reads it on purpose', /postgres:\/\//.test(readTrashed.secureNote?.notes ?? ''), JSON.stringify(readTrashed).slice(0, 160))
   const report = JSON.parse(await client.status())
   check('status() counts the trash (P0-3)', report.trashed >= 1, JSON.stringify(report.trashed))
   const back = await mutations.restore('cipher-db', undefined)

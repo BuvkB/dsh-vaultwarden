@@ -4,6 +4,23 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-10-08
+
+收紧两处明文出口：`bitwarden_get` 不再一次性把整条凭据倒出来，Bitwarden 的「重新验证」也不再靠一个调用方自己能打的勾。
+
+### 变更
+
+- **`field=all` 不再是散弹**。`all` 现在只回密码、用户名、网址、备注与自定义字段，加上 `hasTotp`/`hasCard`/`hasIdentity`/`hasSshKey` 这类存在位与 SSH 指纹。**TOTP 验证码**要 `field=totp`（30 秒即失效，进了 transcript 对调用方无用、对后人是活密钥）；**银行卡 / 身份信息 / SSH 私钥 / 安全笔记正文**要 `field=card` / `identity` / `sshKey` / `secureNote` 各自点名。安全笔记的正文原先走 `notes` 一并带出——对一条笔记来说正文**就是**那个秘密，所以它同样收窄到 `field=secureNote`。
+- **reprompt 的门由主密码开，不由 `confirm: true` 开**。过去 `bitwarden_get { confirm: true }` 就能读 `reprompt: 1` 的条目：那是模型自己给自己打的复选框。现在 `confirm` 参数**已从工具面上删除**，`reveal` RPC 也不再收它。打开门只能走 `vw/authorizeReprompt`——面板里由本人输入主密码，宿主用会话主密钥 `timingSafeEqual` 比对（Argon2id/PBKDF2 派生，KDF 参数随会话缓存，不额外回服务器）。通过后开一个**纯内存**时间窗（`repromptGrantMinutes`，默认 5 分钟）给整条解锁；插件重启或会话失效即作废。
+- **reprompt 的门覆盖条目的每一个字段**。原来只挡 `password`/`totp`/`all`，`notes` 与自定义字段从旁边绕了过去。
+- **面板与工具面同规则**：详情页的 reprompt 条目从「确认读取」按钮换成主密码输入框（回车即提交，输错留在原地并报错）；窄字段改为「含银行卡 · 读取这一项」这样的一行，点一下才单独取那一个字段。
+
+### 测试
+
+- `test/live-sync.test.mjs`：reprompt 用例改写为新契约——`confirm: true` 不再开门、错密码被拒且门保持关闭、对的主密码开门并解出明文、`notes` 同样受门保护。
+- `test/client-card.test.mjs`：新增「错误主密码被拒且不泄露明文」「解锁只走 `vw/authorizeReprompt`、永不带 reveal 的 confirm 布尔」「打开卡片条目不交出卡号与持卡人姓名」「打开 SSH 条目只给指纹、不给公钥与私钥」「只读该字段时才请求它」；reprompt 竞态用例改挂在解锁往返上（迟到的解锁答复不得画进新条目、不得留下 reveal 标志）。grant 轮询只在门真的在屏幕上时才发 `vw/repromptGrant`，否则每次打开面板都要多一次往返。
+- `test/mutations.test.mjs` / `test/write-back.test.mjs`：安全笔记正文改从 `field=secureNote` 取。
+
 ## [0.6.3] — 2026-10-08
 
 修 v0.6.2 引入的一处回归：把「窄面板就解钉」当成宽度问题，结果窄窗口的**鼠标**用户也丢了分区菜单——收藏、验证码、未归类这些行跟着列表一起滚出视野。解钉现在只对**手指**（`pointer: coarse`）生效。
