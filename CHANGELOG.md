@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `test/client-card.test.mjs` 241 → 244 项：新增「解钉必须位于 coarse 指针闸门之后（容器查询版与无容器查询回退版都查）」「窄面板不再给左栏加高度截断」两条断言；原有的 sticky 内联样式、解钉字面量出现 ≥2 次、单一滚动容器等断言保留。
 - 十三套离线测试全部通过。
+
 ## [0.6.2] — 2026-10-08
 
 修两个 v0.6.1 之后报上来的布局问题：API 密钥模式的设置卡片被高度预算压扁、字段溢出到卡片外；桌面端左栏跟着列表一起滚走。
