@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — 2026-10-08
+
+修 v0.6.2 引入的一处回归：把「窄面板就解钉」当成宽度问题，结果窄窗口的**鼠标**用户也丢了分区菜单——收藏、验证码、未归类这些行跟着列表一起滚出视野。解钉现在只对**手指**（`pointer: coarse`）生效。
+
+### 修复
+
+- **窄窗口下的鼠标用户重新拿回固定的分区菜单**。v0.6.2 让左栏在桌面端 `position: sticky; top: 0`，却把「解钉」的判据写成面板宽度（`@container vw-panel (max-width: 480px)`，无容器查询时是 760px 窗口）：窗口小于约 800px 时面板只剩 ~476px，规则命中，左栏退回 `static`，于是收藏 / 验证码 / 未归类这些行和条目一起滚走——读者正站着的那个筛选离开了屏幕。现在解钉只写在 `@media (pointer: coarse)` 里（容器查询版与无容器查询回退版各一份），**鼠标在任意宽度都保持钉住**；只有手指（手机 / 平板单列）才把左栏交回列表上方、跟着列表滑动。
+- **左栏不加高度截断**。sticky 元素高过滚动口时本来就会随列表滚动、直到自身末尾进入视野，文件夹多时左栏自己走完就停住，不需要 `max-height`。中途试过 `max-height: min(52vh, 340px)` + `overflow-y: auto`，结果把最后一行「回收站」截在半个高度上，看着像坏掉的盒子，已放弃。
+
+### 测试
+
+- `test/client-card.test.mjs` 241 → 244 项：新增「解钉必须位于 coarse 指针闸门之后（容器查询版与无容器查询回退版都查）」「窄面板不再给左栏加高度截断」两条断言；原有的 sticky 内联样式、解钉字面量出现 ≥2 次、单一滚动容器等断言保留。
+- 十三套离线测试全部通过。
 ## [0.6.2] — 2026-10-08
 
 修两个 v0.6.1 之后报上来的布局问题：API 密钥模式的设置卡片被高度预算压扁、字段溢出到卡片外；桌面端左栏跟着列表一起滚走。

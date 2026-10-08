@@ -1,6 +1,6 @@
 {
   "name": "dsh-vaultwarden",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Vaultwarden/Bitwarden real-time sync for DeepSeek Harness: WebSocket push notifications, on-disk vault cache with revision probing, read/write tools and an entry browser panel. Independent implementation; see THIRD-PARTY-NOTICES.md.",
   "repository": {
     "type": "git",

@@ -1630,8 +1630,9 @@ async function main() {
     // The rail is a place you stand in, not a row that scrolls away: the list
     // shares the panel's scroll container, so a rail laid out in sync with the
     // entries walked off the top the moment the list moved. Sticky holds it at
-    // the top of the scroll area; the narrow-panel rule in ensureStyles drops
-    // back to static, because on a phone the rail belongs above the list.
+    // the top of the scroll area at every width; only the coarse-pointer rule
+    // in ensureStyles drops back to static, because on a phone the rail
+    // belongs above the list and moves with it.
     const rail = nodeWith('data-vw-nav')[0]
     check(
       'the rail is pinned to the top of the panel while the list scrolls',
@@ -1708,7 +1709,10 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
 
     // The unpin lives in the injected stylesheet: an inline style cannot be
-    // reached by a container query, so the rule has to override it. The
+    // reached by a container query, so the rule has to override it. It is
+    // gated on a coarse pointer — a narrow mouse window keeps the pinned rail
+    // (that is exactly the case the width-only rule broke: the places left the
+    // screen for a mouse user too, reported as 收藏/验证码/未归类 不固定). The
     // window-based copy covers browsers without container queries, where the
     // panel is full width and the phone layout has already kicked in.
     const sheet = panelSheetText
@@ -1722,6 +1726,29 @@ async function main() {
       'the no-container-query fallback repeats the unpin',
       (sheet.match(new RegExp(unpin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 2,
       String((sheet.match(new RegExp(unpin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length),
+    )
+    // A mouse keeps the places at any width: the unpin may only live behind a
+    // coarse-pointer gate, never as a plain width rule. Both copies are
+    // checked: each `position: static !important` has to sit inside a
+    // `pointer: coarse` block, so a narrow mouse window keeps the pinned rail.
+    const coarseAt = sheet.indexOf('@media (pointer: coarse)')
+    const unpinAt = sheet.indexOf(unpin)
+    check(
+      'the rail unpin is gated on a coarse pointer, not on the panel width',
+      coarseAt >= 0 && unpinAt > coarseAt,
+      'coarse@' + coarseAt + ' unpin@' + unpinAt,
+    )
+    const fallbackGate = sheet.indexOf('@media (max-width: 760px) and (pointer: coarse)')
+    const lastUnpinAt = sheet.lastIndexOf(unpin)
+    check(
+      'the no-container-query unpin is gated on the pointer too',
+      fallbackGate >= 0 && lastUnpinAt > fallbackGate,
+      'fallback@' + fallbackGate + ' lastUnpin@' + lastUnpinAt,
+    )
+    check(
+      'a narrow panel does not cap the rail (a clipped row reads as broken)',
+      !/\[data-vw-nav\][^}]*max-height/.test(sheet),
+      'rail height cap still in the injected sheet',
     )
   }
 
