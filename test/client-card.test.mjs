@@ -42,6 +42,23 @@ if (typeof globalThis.window === 'undefined' || typeof globalThis.window.addEven
   }
 }
 
+// The panel writes its own stylesheet, because a container query cannot live
+// in an inline style. react-test-renderer hands out no document either, so
+// scaffold the smallest surface `ensureStyles` needs and keep the text it
+// writes: the narrow-panel rules are assertions in their own right below.
+let panelSheetText = ''
+if (typeof globalThis.document === 'undefined') {
+  globalThis.document = {
+    getElementById: () => null,
+    createElement: () => ({
+      id: '',
+      set textContent(value) { panelSheetText = value },
+      get textContent() { return panelSheetText },
+    }),
+    head: { appendChild: () => {} },
+  }
+}
+
 // The browser hands out localStorage; react-test-renderer does not. The panel
 // keeps the last successful read there so a reload can paint instantly, and the
 // tests below drive that store directly. The key must match lib/client.js.
@@ -1610,6 +1627,18 @@ async function main() {
     await act(async () => { navRow('favorites').props.onClick() })
     await flush(120)
     check('the favorite place holds only the starred entry', listArgs.at(-1)?.section === 'favorites' && nRows().length === 1 && nText().includes('GitHub 工作账号'), 'rows=' + nRows().length)
+    // The rail is a place you stand in, not a row that scrolls away: the list
+    // shares the panel's scroll container, so a rail laid out in sync with the
+    // entries walked off the top the moment the list moved. Sticky holds it at
+    // the top of the scroll area; the narrow-panel rule in ensureStyles drops
+    // back to static, because on a phone the rail belongs above the list.
+    const rail = nodeWith('data-vw-nav')[0]
+    check(
+      'the rail is pinned to the top of the panel while the list scrolls',
+      rail.props.style.position === 'sticky' && rail.props.style.top === 0,
+      JSON.stringify([rail.props.style.position, rail.props.style.top]),
+    )
+
     await act(async () => { panel.renderer.unmount() })
   }
 
@@ -1636,6 +1665,64 @@ async function main() {
     check('the row carries its own countdown ring', Boolean(tRing()))
     check('the row offers a copy control', String(tCopy()?.props?.children) === '复制' && tCopy().props.title === '复制动态码', String(tCopy()?.props?.children))
     await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the panel's own layout: nothing squeezes, nothing escapes ─────────────
+  // The scroll area is a flex column with a height budget (min(58vh, 560px)),
+  // and flex items shrink by default. A card taller than the budget therefore
+  // had its BOX squeezed down to the budget while its content kept painting
+  // past the card's surface onto the dialog background: in API-key mode the
+  // client_id / client_secret rows, their hints and the button row appeared to
+  // float free of the card (reported as 错位). Every direct child of the
+  // scroll area now keeps its natural height and the panel scrolls instead —
+  // which is also what leaves the rail room to stay pinned.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    const scroller = panel.renderer.root.findByProps({ 'data-scroll-area': '' })
+    const wrapper = scroller.children[0]
+    check(
+      'the scroll area keeps its content at its natural height',
+      wrapper?.props.style?.flex === 'none',
+      JSON.stringify(wrapper?.props.style),
+    )
+
+    // The same fix on the three full-screen cards, which is where the reported
+    // misalignment showed: the API-key setup form carries two extra fields and
+    // is the one tall enough to exceed the budget.
+    const apiConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
+    const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
+    const setupRpc = makeRpc({ boot: () => bootWith(apiConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
+    const setup = await mountPanel(mod, {}, setupRpc)
+    const setupCard = setup.renderer.root.findAll((node) => node.props?.style?.minHeight === 200)[0]
+    check(
+      'the setup card cannot be squeezed below its content',
+      Boolean(setupCard) && setupCard.props.style.flex === 'none',
+      JSON.stringify(setupCard?.props.style),
+    )
+    check(
+      'the setup card still caps its width for a wide host',
+      setupCard?.props.style.maxWidth === 520,
+      String(setupCard?.props.style.maxWidth),
+    )
+    await act(async () => { setup.renderer.unmount() })
+    await act(async () => { panel.renderer.unmount() })
+
+    // The unpin lives in the injected stylesheet: an inline style cannot be
+    // reached by a container query, so the rule has to override it. The
+    // window-based copy covers browsers without container queries, where the
+    // panel is full width and the phone layout has already kicked in.
+    const sheet = panelSheetText
+    const unpin = '[data-vw-nav] { position: static !important }'
+    check(
+      'the narrow-panel query unpins the rail so it scrolls with the list',
+      sheet.includes(unpin),
+      sheet.includes(unpin) ? '' : 'rule missing from the injected sheet',
+    )
+    check(
+      'the no-container-query fallback repeats the unpin',
+      (sheet.match(new RegExp(unpin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 2,
+      String((sheet.match(new RegExp(unpin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length),
+    )
   }
 
   // ── favicons: the server's icon when it has one, the tile otherwise ───────

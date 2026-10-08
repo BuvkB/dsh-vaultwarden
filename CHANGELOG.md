@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-10-08
+
+修两个 v0.6.1 之后报上来的布局问题：API 密钥模式的设置卡片被高度预算压扁、字段溢出到卡片外；桌面端左栏跟着列表一起滚走。
+
+### 修复
+
+- **API 密钥模式的设置表单不再「错位」**。滚动区是 `display:flex; flex-direction:column` 且带高度预算（`max-height: min(58vh, 560px)`），而 flex 子项默认 `flex-shrink: 1`：卡片内容比预算高时，**卡片盒子被压到预算高度，内容却继续画到卡片底衬之外**。API 密钥模式比主密码模式多两行（client_id / client_secret，各带一行说明），829px 高的窗口下 58vh 只有 480px，于是 client_secret、它的说明和按钮整块浮在弹窗底色上，读起来就像字段没有对齐。滚动区的直接子项现在一律 `flex: none`（新的 `S.scrollItem`），卡片按自身内容高度撑开，超出部分交给滚动区滚动——实测卡片 `clientHeight` 与 `scrollHeight` 相等，六个控件左缘与宽度完全一致。
+- **桌面端左栏在列表滚动时固定不动**。左栏与列表同在一个滚动容器里，列表一长，左栏就跟着滚出视野。左栏改为 `position: sticky; top: 0`（位移空间由 `align-items: start` 的网格提供，且只有侧栏父级按内容自然高度排布时才有处可粘——这正是上一条修的事）。窄面板里左栏搬到顶部、成为普通内容，因此 `@container vw-panel (max-width: 480px)` 与无容器查询的 760px 窗口回退各显式写一条 `position: static !important`：**手机上这一栏要跟着列表滑动**，固定住反而把条目压在底下。
+
+### 测试
+
+- `test/client-card.test.mjs` 235 → 241 项：新增「滚动区子项保持自然高度」「设置卡片不会被压扁且仍限制宽度」「左栏在桌面端 sticky、窄面板规则里回到 static（含无容器查询回退那一份）」等断言；测试文件补了最小的 `document` 桩，用来接住 `ensureStyles` 注入的样式表文本——容器查询规则本来就只能这样验。
+- 十三套离线测试共 647 → 653 项全部通过。
+
 ## [0.6.1] — 2026-10-07
 
 修两个 v0.6.0 带出来的显示问题：侧栏图标与计数徽章重画，手机端工具栏错位；顺带修好站点图标不刷新与验证码行被切。
