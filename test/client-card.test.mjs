@@ -1802,6 +1802,24 @@ async function main() {
       String(rows()[3].props.children[0].props.children) === 'D',
       JSON.stringify(rows().map((row) => String(row.props.children[0].props.children))),
     )
+
+    // The opened entry is where the icon went missing: the header drew its own
+    // tile straight from the monogram, so a row that was showing the favicon
+    // turned back into a bare letter the moment it was clicked open.
+    await act(async () => { rows()[0].props.onClick() })
+    await flush()
+    const detail = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-detail'] !== undefined)[0]
+    const detailImgs = () => detail()?.findAllByType('img') ?? []
+    check(
+      'the opened entry carries the same site icon its list row had',
+      detailImgs().length === 1 && String(detailImgs()[0].props.src) === 'https://vault.example.com/icons/github.com/icon.png',
+      JSON.stringify(detailImgs().map((node) => node.props.src)),
+    )
+    check(
+      'the header tile scales its icon up instead of showing an 18px dot in a 36px tile',
+      detailImgs()[0]?.props.style?.width === 22,
+      JSON.stringify(detailImgs()[0]?.props.style),
+    )
     await act(async () => { panel.renderer.unmount() })
     mod.__setIcons({})
   }

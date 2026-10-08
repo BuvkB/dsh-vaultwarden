@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-10-08
+
+详情页补上站点图标：列表里认得出来的那个图标，点进去就没了。
+
+### 修复
+
+- **打开条目后，头像位显示的是字母而不是站点图标**。列表行走的是 `iconFor(item) ?? monogram(item)`，而详情卡片的图标位直接把 `monogram(value)` 画进那个 36px 的圆枕里，从没走过站点图标那条路——于是列表行挂着图标，点开却退回成一个字母。详情头部现在与列表行共用同一套取图逻辑：服务器有图标就显示图标，没有才退回字母圆枕。
+- **reprompt 条目的头部也拿得到图标**。`reprompt` 的门只挡字段，不挡条目身份：网址本来就在打开它的那一行里露着，所以 `projectItem` 的 reprompt 分支现在一并带出 `uris`，门仍然照旧一个字也不放（`password`/`notes`/自定义字段一个都不给）。
+- **详情头部的图标跟着瓦片放大**。`iconFor` 收一个可选的图片样式：列表行的 18px 不变，36px 的大圆枕里用 22px，不再是一个 18px 的小点浮在正中间。
+
+### 测试
+
+- `test/client-card.test.mjs`（250 → 252）：新增「打开的条目带着它列表行上那个站点图标」「头部瓦片把图标放大，而不是在 36px 里放 18px」。
+
 ## [0.7.0] — 2026-10-08
 
 收紧两处明文出口：`bitwarden_get` 不再一次性把整条凭据倒出来，Bitwarden 的「重新验证」也不再靠一个调用方自己能打的勾。
