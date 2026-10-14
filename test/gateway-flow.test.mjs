@@ -462,6 +462,89 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 
+  // ── the editor's own path: draft → update → sync ────────────────────────
+  // The panel reads the whole record over `draft`, saves the diff over
+  // `update`, and asks for a `sync` so the next read shows the change. This
+  // block drives all three against the real gateway and the mock server, which
+  // is the only way to know the host half answers them the way the browser
+  // half expects.
+  {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vw-editor-'))
+    const store = { path: path.join(dir, 'session.json') }
+    const editorServer = await startMockServer({ twoFactor: false })
+    const gateway = Object.create(VaultGateway.prototype)
+    const editorSettings = { serverUrl: editorServer.url, email: EMAIL, masterPassword: PASSWORD }
+    let client = new VaultClient({ ...editorSettings, sessionStore: store })
+    gateway.getClient = () => client
+    gateway.createClient = (override) => new VaultClient({ ...editorSettings, ...override, sessionStore: store })
+    gateway.owner = { getSettings: () => ({ email: EMAIL, accessMode: 'auto' }), update: async () => {} }
+    gateway.mutations = null
+    gateway.pendingProbe = null
+    gateway.pendingPatch = null
+
+    const connected = await gateway.connect(editorServer.url, EMAIL, PASSWORD)
+    check('the editor path signs in', connected?.ok === true, JSON.stringify(connected))
+
+    // draft: the whole plaintext record, including the card/identity/sshKey
+    // classes the narrow reveal never sends.
+    const draft = await gateway.draft('cipher-github')
+    check('draft answers the entry the panel asked for', draft?.id === 'cipher-github' && draft?.name === 'GitHub 工作账号', JSON.stringify(draft?.name))
+    check('draft carries the login fields the form fills', draft?.username === 'octocat@jindom.cc' && typeof draft?.password === 'string', JSON.stringify(draft?.username))
+    check('draft reports the TOTP flag without the seed', draft?.hasTotp === true && draft?.totpSecret === undefined, JSON.stringify({ hasTotp: draft?.hasTotp, seed: draft?.totpSecret }))
+    check('draft reports the custom fields', Array.isArray(draft?.fields) && draft.fields.length === 2, JSON.stringify(draft?.fields))
+    check('draft reports the revision the save will lock on', typeof draft?.revisionDate === 'string', String(draft?.revisionDate))
+
+    // A trashed entry is not editable from here: the same gate the reveal has.
+    const missing = await gateway.draft('cipher-does-not-exist').catch((error) => error.code)
+    check('draft of an unknown id fails as not_found', missing === 'not_found', String(missing))
+
+    // update: only the named fields change. The custom fields the form never
+    // showed must survive, and so must the passkeys and attachments.
+    const updated = await gateway.update('cipher-github', { username: 'octocat@jindom.cc', notes: '编辑器改过的备注' })
+    check('an update answers with the new revision', updated?.updated === true && typeof updated?.revisionDate === 'string', JSON.stringify(updated))
+    const afterUpdate = await gateway.draft('cipher-github')
+    check('the changed field is what was sent', afterUpdate?.notes === '编辑器改过的备注', String(afterUpdate?.notes))
+    check('an untouched username survives the write', afterUpdate?.username === 'octocat@jindom.cc', String(afterUpdate?.username))
+    check('custom fields survive a write that did not mention them', afterUpdate?.fields?.length === 2, JSON.stringify(afterUpdate?.fields))
+
+    // sync: the write already landed server-side, and this is what makes the
+    // next list read show it.
+    const synced = await gateway.sync()
+    check('a sync after a write reports the vault', synced?.ok === true && Number(synced?.items) > 0, JSON.stringify(synced))
+    const listed = await gateway.list('', 50)
+    check('the synced vault still reads back the entry', listed?.items?.some((item) => item.id === 'cipher-github') === true, JSON.stringify(listed?.items?.map((item) => item.id)))
+
+    // The conflict the editor reports: another client wrote while the
+    // editor was open, so the copy the panel is holding is older than the
+    // server's. The write must be refused rather than overwritten — this is
+    // the state the panel turns into "重新打开编辑器".
+    const row = editorServer.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-github')
+    const heldRevision = row.revisionDate
+    row.revisionDate = new Date(Date.now() + 60_000).toISOString() // another client wrote
+    let stale = null
+    try {
+      await gateway.update('cipher-github', { username: 'stale-write' })
+    } catch (error) {
+      stale = error
+    }
+    check('a stale revision is refused rather than overwritten', stale?.code === 'stale_revision', stale?.message)
+    check('the refused write left the entry alone', row.login?.username !== 'stale-write')
+    row.revisionDate = heldRevision // back to what the client holds
+
+    // create: the panel's other half. A login entry with the fields the form
+    // collects, and a sync so the list shows it.
+    const created = await gateway.create({ name: '面板新建条目', type: 'login', username: 'made-in-panel', password: 'panel-pass-1', uris: ['https://panel.example.com'] })
+    check('a created entry answers with its id', typeof created?.id === 'string' && created?.created === true, JSON.stringify(created))
+    const createdRead = await gateway.list('', 50)
+    check('the created entry is in the vault afterwards', createdRead?.items?.some((item) => item.id === created?.id) === true, JSON.stringify(createdRead?.items?.map((item) => item.id)))
+
+    await editorServer.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+
   await server.close()
   console.log(`\n${passed} passed, ${failed} failed`)
   if (failed > 0) process.exitCode = 1

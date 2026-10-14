@@ -150,7 +150,7 @@ async function main() {
   const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
   const { VaultGateway } = await import('../lib/gateway.js')
   const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
-  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge', 'boot', 'restore', 'folders', 'overview'].every((name) => markers.includes(name)), markers.join(','))
+  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge', 'boot', 'restore', 'folders', 'overview', 'draft'].every((name) => markers.includes(name)), markers.join(','))
   check('every Remote method has a source-mode-safe signature', (() => {
     // The gateway's SRC mode parses the parameter list as plain identifiers:
     // defaults, destructuring and rest are rejected at call time.
@@ -173,6 +173,15 @@ async function main() {
     return offenders.length === 0
   })(), markers.join(','))
   check('gateway binds the vw namespace', Object.create(VaultGateway.prototype) instanceof Object && VaultGateway.name === 'VaultGateway')
+  check("the editor's draft call names only gateway parameters", (() => {
+    // The gateway rejects args fields its parameter list does not declare, so
+    // a typo in the panel's `invoke('draft', { … })` fails at call time rather
+    // than at read time. `id` and `includeTrashed` are both parameters of
+    // `draft`; anything else is a bug.
+    const paramsOf = (fn) => fn.toString().slice(fn.toString().indexOf('(') + 1, fn.toString().indexOf(')')).split(',').map((part) => part.trim()).filter(Boolean)
+    const declared = paramsOf(VaultGateway.prototype.draft)
+    return declared.includes('id') && declared.includes('includeTrashed')
+  })(), 'draft(id, includeTrashed)')
   check('gateway keeps no private members (RPC receiver is a proxy)', (() => {
     // The gateway invokes methods with the Cordis proxy as receiver; a `#private`
     // member would throw "Receiver must be an instance of class VaultGateway".

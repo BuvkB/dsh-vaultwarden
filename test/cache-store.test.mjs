@@ -289,10 +289,51 @@ async function main() {
   await plainAgain.unlock()
   check('a client without a cache store behaves as before', existsSync(plain.cachePath) === false && server.stats.syncs > syncs8)
 
+  // ── concurrent readers share ONE unlock ──────────────────────────────────
+  // The panel opens by firing four reads at once (list / status / overview /
+  // folders). Before single-flight each of them missed the in-memory vault and
+  // the disk cache at the same instant and ran the whole cold chain for
+  // itself: four /api/sync downloads (4.7 s measured against a real account)
+  // where one would do. The vault must be fetched once and handed to every
+  // waiter.
+  const shared = scratchDir('shared')
+  const sharedSession = new SessionStore(shared.sessionPath, { maxAgeDays: 30 })
+  const sharedClient = new VaultClient(settings, { sessionStore: sharedSession, cacheStore: new CacheStore(shared.cachePath) })
+  const syncsBefore = server.stats.syncs
+  const concurrently = await Promise.all([
+    sharedClient.findEntries('', 50, 0, undefined, { includeArchived: true, section: 'all', sectionValue: '' }),
+    sharedClient.overview(),
+    sharedClient.folderList(),
+    sharedClient.unlock(),
+  ])
+  check('four concurrent cold readers download the vault once', server.stats.syncs - syncsBefore === 1, `syncs +${server.stats.syncs - syncsBefore}`)
+  check('every concurrent reader gets an answer', concurrently.every((answer) => answer !== undefined && answer !== null))
+  const sharedReport = JSON.parse(await sharedClient.status())
+  check('the concurrent readers all see the unlocked vault', sharedReport.unlocked === true && sharedReport.items > 0)
+
+  // Single-flight must be per attempt, not a latch: once it settles the next
+  // cold start has to run its own chain instead of replaying a settled
+  // promise. Clearing the in-memory vault forces exactly that.
+  sharedClient.vault = null
+  const syncsAfterFlight = server.stats.syncs
+  await sharedClient.unlock()
+  check('the flight is cleared once it settles, so the next need re-unlocks', sharedClient.vault !== null && server.stats.syncs >= syncsAfterFlight)
+
+  // A sign-out during an in-flight unlock must not be overtaken by the vault
+  // that unlock was fetching.
+  const abortDir = scratchDir('abort')
+  const abortClient = new VaultClient(settings, { sessionStore: new SessionStore(abortDir.sessionPath, { maxAgeDays: 30 }), cacheStore: new CacheStore(abortDir.cachePath) })
+  const pendingAbort = abortClient.unlock()
+  abortClient.invalidate({ keepStored: true })
+  await pendingAbort.catch(() => null)
+  check('a sign-out during an unlock leaves the session dropped', abortClient.token === null)
+
   await other.close()
   await server.close()
   scratch.dispose()
   plain.dispose()
+  shared.dispose()
+  abortDir.dispose()
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed ? 1 : 0)
 }

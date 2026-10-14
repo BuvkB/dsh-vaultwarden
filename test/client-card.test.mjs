@@ -116,6 +116,41 @@ const REVEALS = {
   'item-3': { repromptRequired: true, id: 'item-3', name: '需要重新验证的条目', type: 'login' },
 }
 const CONFIRMED_REVEAL = { ...REVEALS['item-3'], repromptRequired: undefined, password: 'reprompt-pass-9', username: 'reprompt-user' }
+/**
+ * `vw/draft` answers: the whole plaintext record, for the editor.
+ *
+ * The shape mirrors what lib/vault.js draftEntry() returns — including the
+ * reprompt stub, which carries the entry's identity and nothing else. The
+ * fixture used to be a copy of the reveal payload, which would have let the
+ * editor open on an entry the host had actually locked.
+ */
+const DRAFTS = {
+  'item-1': {
+    id: 'item-1',
+    name: 'GitHub 工作账号',
+    type: 'login',
+    username: 'octocat@example.com',
+    password: 'gh-p@ssw0rd-42',
+    hasTotp: true,
+    uris: ['https://github.com/login'],
+    notes: 'SSH 密钥在 CI 里',
+    fields: [{ name: '租户', value: 'jindom', type: 0 }],
+    favorite: true,
+    reprompt: 0,
+    folderId: 'folder-work',
+    organizationId: null,
+    revisionDate: '2026-10-01T00:00:00.000Z',
+    card: null,
+    identity: null,
+    sshKey: null,
+    secureNote: null,
+    attachments: [],
+    passwordHistory: [],
+    hasFido2: false,
+  },
+  'item-3': { id: 'item-3', name: '需要重新验证的条目', type: 'login', repromptRequired: true },
+}
+
 
 /** The hosted configuration the panel opens with. */
 const CONFIG_VALUE = { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' }
@@ -230,6 +265,10 @@ function makeRpc(overrides = {}) {
         // through `authorizeReprompt`, which hands the view back with the
         // unlock, so `reveal` never sees the password for item-3.
         return { ok: true, value: REVEALS[args.id] ?? { error: 'not_found' } }
+      }
+      if (method === 'draft') {
+        const args = payload?.args ?? {}
+        return { ok: true, value: DRAFTS[args.id] ?? { error: 'not_found' } }
       }
       if (method === 'repromptGrant') return { ok: true, value: { granted: false, remainingMs: 0 } }
       if (method === 'authorizeReprompt') {
@@ -646,6 +685,8 @@ async function main() {
   await act(async () => {
     await sleep(50)
   })
+  const count = (k) => renderer.root.findAll((n) => n.props?.[k] !== undefined).length
+  const dnode = renderer.root.findAll((n) => n.props?.['data-vw-detail'] !== undefined)[0]
   check('reprompt entry is gated with an explanation', text().includes('重新验证') && !text().includes('reprompt-pass-9'))
   // The panel asks for the master password; a wrong one leaves the gate shut.
   const masterInput = () => renderer.root.findAllByType('input').find((node) => node.props.type === 'password')
@@ -1918,7 +1959,7 @@ async function main() {
     await act(async () => { wRows()[0].props.onClick() })
     await act(async () => { await sleep(50) })
 
-    check('a writable panel offers archive, trash and move', actionButtons().sort().join(',') === 'archive,move,trash', actionButtons().join(','))
+    check('a writable panel offers edit, archive, trash and move', actionButtons().sort().join(',') === 'archive,edit,move,trash', actionButtons().join(','))
 
     await act(async () => { nodeWith('data-vw-action', 'archive')[0].props.onClick() })
     check('archive asks before writing', writes.length === 0 && nodeWith('data-vw-confirm').length === 1)
@@ -1956,6 +1997,255 @@ async function main() {
     await flush()
     check('confirming trash calls remove with just the id', writes.at(-1)?.method === 'remove' && writes.at(-1)?.args?.id === 'item-1' && writes.at(-1)?.args?.permanent === undefined, JSON.stringify(writes.at(-1)?.args))
     await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the editor: one draft, one diff, one save ─────────────────────────────
+  // The reported gap: the panel could archive, trash and move an entry but
+  // could not change what was inside it. The editor opens on the detail's
+  // 编辑 button (and on the toolbar's 新建条目 for a new one), reads the whole
+  // record over vw/draft, and saves only the fields that changed.
+  {
+    const writes = []
+    const drafts = []
+    const syncs = []
+    const editorRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      folders: () => ({ ok: true, value: { folders: [{ id: 'folder-work', name: '工作', count: 1 }], total: 1, unfiled: 3, hint: 'folderList' } }),
+      draft: (args) => {
+        drafts.push(args)
+        return { ok: true, value: DRAFTS[args.id] ?? { error: 'not_found' } }
+      },
+      update: (args) => {
+        writes.push({ method: 'update', args })
+        return { ok: true, value: { id: args.id, name: args.input?.name ?? 'x', updated: true, revisionDate: '2026-10-14T00:00:00.000Z' } }
+      },
+      create: (args) => {
+        writes.push({ method: 'create', args })
+        return { ok: true, value: { id: 'item-new', name: args.input?.name ?? 'x', type: args.input?.type ?? 'login', created: true, revisionDate: '2026-10-14T00:00:00.000Z' } }
+      },
+      sync: () => {
+        syncs.push(true)
+        return { ok: true, value: { ok: true, items: 3 } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, editorRpc)
+    const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
+    const eText = () => JSON.stringify(panel.renderer.toJSON())
+    const eRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    const editorNode = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-editor'] !== undefined)[0]
+    const editorInput = (label) => panel.renderer.root.findAllByType('input').find((node) => node.props['aria-label'] === label)
+    const editorTextarea = (label) => panel.renderer.root.findAllByType('textarea').find((node) => node.props['aria-label'] === label)
+    const fieldValue = (key) => {
+      const node = panel.renderer.root.findAll((n) => n.props?.['data-vw-editor-field'] === key)[0]
+      if (!node) return undefined
+      const walk = (current) => {
+        if (current == null) return undefined
+        if (typeof current === 'string' || typeof current === 'number') return String(current)
+        if (Array.isArray(current)) return current.map(walk).find((entry) => entry !== undefined)
+        return walk(current.children)
+      }
+      return walk(node)
+    }
+
+    await act(async () => { eRows()[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+
+    // Opening: the draft is asked for, and the form is filled from it.
+    await act(async () => { nodeWith('data-vw-action', 'edit')[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('edit asks the host for the whole record', drafts.length === 1 && drafts[0].id === 'item-1', JSON.stringify(drafts))
+    check('the editor replaces the detail, not a section of it', Boolean(editorNode()) && nodeWith('data-vw-detail').length === 1)
+    check('the editor fills the form from the draft', editorInput('名称').props.value === 'GitHub 工作账号' && editorInput('用户名').props.value === 'octocat@example.com', String(editorInput('用户名')?.props.value))
+    check('the password field is a password field', editorInput('密码').props.type === 'password' && editorInput('密码').props.value === 'gh-p@ssw0rd-42')
+    // A single-line input: a URL is one line, and a 66px textarea under a
+    // short label read as a chunky empty slab on a phone.
+    check('the URI list is a single-line input', editorInput('网址').props.type === 'text' && editorInput('网址').props.value === 'https://github.com/login', String(editorInput('网址')?.props.value))
+    check('the draft totp seed is not echoed back as a value', editorInput('验证码密钥（otpauth:// 或 Base32）').props.value === '')
+    check('the editor names what it will not touch', eText().includes('保存时会原样保留'))
+
+    // A save sends only the fields that changed: the untouched username is
+    // absent, and the passkeys/attachments/history the form never showed are
+    // not touched at all.
+    await act(async () => { editorInput('用户名').props.onChange({ target: { value: 'new-user@example.com' } }) })
+    await act(async () => { editorInput('名称').props.onChange({ target: { value: 'GitHub 主账号' } }) })
+    await act(async () => { panel.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined)[0].props.onClick() })
+    await act(async () => { await sleep(60) })
+    check('saving writes the changed fields', writes.length === 1 && writes[0].method === 'update' && writes[0].args.id === 'item-1', JSON.stringify(writes[0]?.args))
+    const savedInput = writes[0]?.args?.input ?? {}
+    check('the save names the username and the name', savedInput.username === 'new-user@example.com' && savedInput.name === 'GitHub 主账号', JSON.stringify(savedInput))
+    check('an untouched password is not resent', !('password' in savedInput))
+    check('an untouched TOTP seed is not resent', !('totp' in savedInput))
+    check('the fields are flat, never nested under a patch', Object.keys(savedInput).every((key) => !['patch', 'input'].includes(key)))
+    check('the save is followed by a sync the reader can see', syncs.length === 1, String(syncs.length))
+    check('the editor reports the save', eText().includes('已保存'))
+    check('the editor says the sync finished', eText().includes('已同步到服务器'))
+    check('the save left the editor open on the entry', Boolean(editorNode()))
+
+    // A conflict: the host refuses a write whose own copy moved on, and the
+    // editor must say so rather than offering a retry that would overwrite.
+    const conflictRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      update: () => {
+        const error = new Error('条目已被其他客户端修改，请重新读取后再试')
+        error.code = 'stale_revision'
+        throw error
+      },
+    })
+    const conflicted = await mountPanel(mod, {}, conflictRpc)
+    await act(async () => { conflicted.renderer.root.findAll((n) => n.props?.role === 'option')[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    await act(async () => { conflicted.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit')[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    await act(async () => { conflicted.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined)[0].props.onClick() })
+    await act(async () => { await sleep(60) })
+    const conflictText = () => JSON.stringify(conflicted.renderer.toJSON())
+    check('a stale write is reported as a conflict', conflictText().includes('已被其他客户端修改'))
+    check('a conflicted editor stops offering the save', Boolean(conflicted.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined)[0]?.props.disabled))
+    check('a conflicted editor explains what to do', conflictText().includes('重新打开编辑器'))
+    await act(async () => { conflicted.renderer.unmount() })
+
+    // New entries: the toolbar button opens a blank form, and the save is a
+    // create. The type selector rebuilds the form, so switching to a card
+    // entry offers card fields and not a password.
+    await act(async () => { panel.renderer.unmount() })
+    const creatorRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'auto' }, true, AUTHED_SESSION),
+      create: (args) => {
+        writes.push({ method: 'create', args })
+        return { ok: true, value: { id: 'item-new', name: args.input?.name ?? 'x', type: args.input?.type ?? 'login', created: true, revisionDate: '2026-10-14T00:00:00.000Z' } }
+      },
+      sync: () => {
+        syncs.push(true)
+        return { ok: true, value: { ok: true, items: 3 } }
+      },
+    })
+    const creator = await mountPanel(mod, {}, creatorRpc)
+    const cText = () => JSON.stringify(creator.renderer.toJSON())
+    const cNodeWith = (key, value = '') => creator.renderer.root.findAll((node) => node.props?.[key] === value)
+    // The editor lives in the detail pane, which sits AFTER the list in the
+    // tree. On a narrow panel the list is thousands of pixels tall, so without
+    // the drill flag the form opened far below the fold and the + that opened
+    // it vanished from the toolbar — the button worked and looked broken.
+    // Asserted on the flag itself, because the layout that consumes it is CSS.
+    const drillFlag = () => creator.renderer.root.findAll((node) => node.props?.['data-vw-body'] !== undefined)[0]?.props['data-vw-drill']
+    check('the list keeps the column while nothing is open', drillFlag() === undefined, String(drillFlag()))
+    await act(async () => { cNodeWith('data-vw-new')[0].props.onClick() })
+    check('the new-entry button opens a blank editor', cNodeWith('data-vw-editor').length === 1 && cText().includes('新建条目'))
+    check('the editor is opened in the drill state once it exists', drillFlag() === '1', String(drillFlag()))
+    check('a blank editor asks for a name before it saves', Boolean(cNodeWith('data-vw-editor-save')[0]))
+    // The settings glyph must read as a GEAR, not as a sun. The previous
+    // version was a hub circle with eight detached spokes, which is the sun
+    // glyph at 14px; a gear's teeth are part of the outline, which is what
+    // makes the difference visible. Asserted structurally: the glyph is a hub
+    // plus ONE closed outline with no detached radial strokes.
+    const settingsBtn = () => creator.renderer.root.findAll((n) => n.type === 'button' && n.props['aria-label'] === '设置')[0]
+    check('the settings action is still a single labelled button', Boolean(settingsBtn()))
+    const glyphPaths = () => {
+      const svg = settingsBtn()?.findAllByType('svg')[0]
+      return svg ? { hub: svg.findAllByType('circle').map((c) => c.props.r), paths: svg.findAllByType('path').map((p) => p.props.d) } : null
+    }
+    const gear = glyphPaths()
+    check('the gear glyph is a hub plus one closing outline', Boolean(gear) && gear.hub.length === 1 && gear.paths.length === 1, JSON.stringify(gear))
+    check(
+      'the outline is a single closed path (teeth are the rim, not spokes)',
+      Boolean(gear) && gear.paths[0].trimEnd().endsWith('Z') && (gear.paths[0].match(/M/g) ?? []).length === 1,
+      gear?.paths?.[0]?.slice(0, 60),
+    )
+    // SVG line-to repeats its command implicitly, so counting `L` sees only
+    // the first one. Count the POINTS instead: each tooth contributes two
+    // outer corners and two root corners, so eight teeth is 32 points.
+    const gearPoints = (gear?.paths?.[0] ?? '').replace(/[MLZ]/g, ' ').trim().split(/\s+/).filter(Boolean).length / 2
+    check('the outline has eight teeth around the hub', gearPoints === 32, String(gearPoints) + ' points')
+    // The three toolbar actions are icon-only: their labels live in title and
+    // aria-label, and each carries the 16×16 glyph from the shared table.
+    check('the toolbar actions are icon-only, each with an accessible name', (() => {
+      const glyphs = creator.renderer.root.findAll((n) => n.type === 'svg' && n.props.viewBox === '0 0 16 16')
+      const named = creator.renderer.root.findAll((n) => n.type === 'button' && typeof n.props['aria-label'] === 'string')
+      return glyphs.length >= 3 && named.length >= 3
+    })(), JSON.stringify(creator.renderer.root.findAll((n) => n.type === 'button').map((b) => b.props['aria-label'])))
+    const nameInput = () => creator.renderer.root.findAllByType('input').find((node) => node.props['aria-label'] === '名称')
+    await act(async () => { nameInput().props.onChange({ target: { value: '' } }) })
+    await act(async () => { cNodeWith('data-vw-editor-save')[0].props.onClick() })
+    check('a nameless entry is refused without a round trip', writes.filter((w) => w.method === 'create').length === 0 && cText().includes('请填写条目名称'))
+
+    await act(async () => { nameInput().props.onChange({ target: { value: '新数据库口令' } }) })
+    await act(async () => { cNodeWith('data-vw-editor-save')[0].props.onClick() })
+    await act(async () => { await sleep(60) })
+    const created = writes.filter((w) => w.method === 'create').at(-1)
+    check('a new entry is created with the typed name', created?.args?.input?.name === '新数据库口令', JSON.stringify(created?.args))
+    check('a new entry is created as a login', created?.args?.input?.type === 'login')
+    check('a created entry is synced too', syncs.length === 2, String(syncs.length))
+    check('the editor closes once the entry exists', cNodeWith('data-vw-editor').length === 0)
+
+    // The type selector rebuilds the form: a card entry gets card fields, and
+    // the login-only controls are gone.
+    await act(async () => { cNodeWith('data-vw-new')[0].props.onClick() })
+    const typeSelect = () => creator.renderer.root.findAllByType('select').find((node) => node.props['aria-label'] === '类型')
+    check('the creator offers every entry type', typeSelect().props.children.length === 5, String(typeSelect().props.children.length))
+    await act(async () => { typeSelect().props.onChange({ target: { value: 'card' } }) })
+    const cardLabels = () => creator.renderer.root.findAll((node) => node.props?.['data-vw-editor-field'] !== undefined).map((node) => node.props['data-vw-editor-field'])
+    check('switching to a card rebuilds the form around card fields', cardLabels().includes('number') && cardLabels().includes('code') && !cardLabels().includes('password'), cardLabels().join(','))
+    const cardNumber = () => creator.renderer.root.findAll((node) => node.props?.['data-vw-editor-field'] === 'number')[0]
+    check('the card number field is masked while typing', Boolean(cardNumber()))
+    await act(async () => { typeSelect().props.onChange({ target: { value: 'identity' } }) })
+    check('switching to an identity rebuilds it again', cardLabels().includes('firstName') && cardLabels().includes('lastName') && !cardLabels().includes('number'), cardLabels().join(','))
+    await act(async () => { typeSelect().props.onChange({ target: { value: 'sshKey' } }) })
+    check('switching to an SSH key offers the key material', cardLabels().includes('privateKey') && cardLabels().includes('publicKey'), cardLabels().join(','))
+    await act(async () => { typeSelect().props.onChange({ target: { value: 'secureNote' } }) })
+    check('a secure note keeps only the body', cardLabels().join(',') === 'notes', cardLabels().join(','))
+    await act(async () => { creator.renderer.unmount() })
+
+    // A reprompt entry cannot be edited from here: the host answers the draft
+    // with a stub, and the panel says the gate is in the way.
+    const lockedRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      reveal: () => ({ ok: true, value: { id: 'item-3', name: '需要重新验证的条目', type: 'login', repromptRequired: true } }),
+    })
+    // The gate is the detail, and the editor is only reachable through the
+    // unlock window the master password opens. What is asserted here is the
+    // half of the contract that must hold *before* that: while the entry is
+    // locked there is no form, no save, and no way to reach the editor.
+    const locked = await mountPanel(mod, {}, lockedRpc)
+    await act(async () => { locked.renderer.root.findAll((n) => n.props?.role === 'option')[2].props.onClick() })
+    await act(async () => { await sleep(50) })
+    const lockedText = () => JSON.stringify(locked.renderer.toJSON())
+    check('a locked entry shows the gate, not the write actions', locked.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit').length === 0)
+    check('a locked entry opens no form', locked.renderer.root.findAll((n) => n.props?.['data-vw-editor'] !== undefined).length === 0)
+    check('a locked entry offers no save', locked.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined).length === 0)
+    await act(async () => { locked.renderer.unmount() })
+
+    // Once the master password has opened the window, the editor becomes
+    // reachable from the gate itself — and the host answers a draft for a
+    // still-gated entry with a stub, never the plaintext.
+    const stubRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      repromptGrant: () => ({ ok: true, value: { granted: true, remainingMs: 300000 } }),
+      draft: () => ({ ok: true, value: DRAFTS['item-3'] }),
+      reveal: () => ({ ok: true, value: { id: 'item-3', name: '需要重新验证的条目', type: 'login', repromptRequired: true } }),
+    })
+    const stub = await mountPanel(mod, {}, stubRpc)
+    await act(async () => { stub.renderer.root.findAll((n) => n.props?.role === 'option')[2].props.onClick() })
+    await act(async () => { await sleep(80) })
+    check('the unlock window opens the editor from the gate', stub.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit').length === 1)
+    await act(async () => { stub.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit')[0].props.onClick() })
+    await act(async () => { await sleep(60) })
+    const stubText = () => JSON.stringify(stub.renderer.toJSON())
+    check('a stub draft fills no form', stub.renderer.root.findAllByType('input').every((node) => node.props['aria-label'] !== '名称'))
+    check('a stub draft says the master password is in the way', stubText().includes('需要先输入主密码解锁'))
+    check('a stub draft offers no save', stub.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined).length === 0)
+    await act(async () => { stub.renderer.unmount() })
+
+    // readonly: the button is not offered at all, and the panel says why.
+    const readonlyRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'readonly' }, true, AUTHED_SESSION),
+    })
+    const readonlyPanel = await mountPanel(mod, {}, readonlyRpc)
+    check('a readonly panel offers no new-entry button', readonlyPanel.renderer.root.findAll((n) => n.props?.['data-vw-new'] !== undefined).length === 0)
+    await act(async () => { readonlyPanel.renderer.root.findAll((n) => n.props?.role === 'option')[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('a readonly panel offers no edit action', readonlyPanel.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit').length === 0)
+    check('a readonly panel explains the missing edit', JSON.stringify(readonlyPanel.renderer.toJSON()).includes('当前为只读模式'))
+    await act(async () => { readonlyPanel.renderer.unmount() })
   }
 
   // ── a trashed entry: read with includeTrashed, restore is the only action ──
@@ -2083,6 +2373,81 @@ async function main() {
     check('readonly explains the missing write actions', roNote.length === 1 && JSON.stringify(roNote[0].props.children).includes('当前为只读模式'), String(roNote.length))
     check('readonly still renders the entry itself', JSON.stringify(panel.renderer.toJSON()).includes('octocat@example.com'))
     await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the transcript row: secrets never reach the conversation surface ──────
+  // The model-facing result is plaintext by design, so the card is the only
+  // thing standing between a password and a screenshot / session log. These
+  // checks are the security contract: the row must render, must show WHICH
+  // entry and field were touched, and must never render the value.
+  {
+    const H = react.createElement
+    const renderToolRow = (toolName, args, resultText, isError = false) => {
+      const element = H(mod.__toolRow.component, {
+        toolName,
+        block: {
+          kind: 'tool-result',
+          call: { name: toolName, argsRaw: JSON.stringify(args ?? {}) },
+          content: resultText === null ? [] : [{ type: 'text', text: resultText }],
+          isError,
+        },
+        t: (key) => dictionaries.zh[key] ?? key,
+      })
+      let renderer
+      act(() => { renderer = create(element) })
+      // The row opens collapsed, like the host's own tool cards: the visible
+      // line is the summary, and the payload is one click away. The assertions
+      // below expand it, because that is what a reader sees when they look — and
+      // a secret reachable by clicking is still a secret on screen.
+      const toggle = renderer.root.findAll((node) => node.props?.['data-vw-tool-toggle'] !== undefined)[0]
+      act(() => { toggle.props.onClick() })
+      const json = renderer.toJSON()
+      renderer.unmount()
+      return json
+    }
+    const rowKeys = Object.keys(mod.__toolRow.keys ?? {})
+    check('every bitwarden tool has a transcript row registered', rowKeys.length === 9 && rowKeys.every((k) => k.startsWith('bitwarden_')), rowKeys.join(','))
+    const rows = renderToolRow('bitwarden_get', {
+      id: 'item-1',
+      name: 'github.com',
+      field: 'password',
+    }, JSON.stringify({ id: 'item-1', name: 'github.com', type: 'login', username: 'octocat@example.com', password: 'hunter2-secret', uris: ['https://github.com/login'] }, null, 2))
+    const rowText = JSON.stringify(rows)
+    check('the row names the tool and the entry', rowText.includes('读取凭据') && rowText.includes('github.com'), rowText.slice(0, 200))
+    check('NEGATIVE CONTROL: the plaintext password is nowhere in the row', !rowText.includes('hunter2-secret'))
+    check('the password is replaced by dots', rowText.includes('••••••••'))
+    check('the identifier fields still read normally', rowText.includes('octocat@example.com') && rowText.includes('item-1'))
+    const maskedBadge = rowText.includes('密码等敏感值已隐藏')
+    check('the row says a secret was hidden', maskedBadge)
+
+    // A create carries the password in its ARGUMENTS, which the row also draws.
+    const createRow = JSON.stringify(renderToolRow('bitwarden_create', { name: '新站点', username: 'u', password: 'arg-secret-1' }, JSON.stringify({ id: 'n1', name: '新站点', type: 'login' })))
+    check('NEGATIVE CONTROL: a password in the arguments is masked too', !createRow.includes('arg-secret-1') && createRow.includes('••••••••'))
+    check('the new entry is still named', createRow.includes('新站点'))
+
+    // TOTP, card, identity and SSH shapes: each is a separate secret class the
+    // plugin can return under its own field name.
+    const totpRow = JSON.stringify(renderToolRow('bitwarden_get', { id: 'x', field: 'totp' }, JSON.stringify({ id: 'x', name: 'x', totp: '986029' })))
+    check('NEGATIVE CONTROL: a live TOTP code is masked', !totpRow.includes('986029'))
+    const cardRow = JSON.stringify(renderToolRow('bitwarden_get', { id: 'x', field: 'card' }, JSON.stringify({ id: 'x', card: { cardholderName: '张三', brand: 'Visa', number: '4111111111111111', code: '321' } })))
+    check('NEGATIVE CONTROL: card number and security code are masked', !cardRow.includes('4111111111111111') && !cardRow.includes('321'))
+    check('the cardholder name is still readable', cardRow.includes('张三'))
+    const sshRow = JSON.stringify(renderToolRow('bitwarden_get', { id: 'x', field: 'sshKey' }, JSON.stringify({ id: 'x', sshKey: { privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----', keyFingerprint: 'SHA256:abc' } })))
+    check('NEGATIVE CONTROL: the SSH private key is masked', !sshRow.includes('BEGIN OPENSSH'))
+    check('the SSH fingerprint stays readable', sshRow.includes('SHA256:abc'))
+    const noteRow = JSON.stringify(renderToolRow('bitwarden_get', { id: 'x', field: 'secureNote' }, JSON.stringify({ id: 'x', secureNote: { type: 0, notes: 'a note body that is the secret' } })))
+    check('NEGATIVE CONTROL: a secure note body is masked', !noteRow.includes('a note body that is the secret'))
+    const fieldRow = JSON.stringify(renderToolRow('bitwarden_get', { id: 'x', field: 'fields' }, JSON.stringify({ id: 'x', fields: [{ name: 'PIN', value: '4321' }] })))
+    check('NEGATIVE CONTROL: a custom field value is masked', !fieldRow.includes('4321'))
+    check('the custom field name is still readable', fieldRow.includes('PIN'))
+
+    // A search returns no secrets: claiming a mask when nothing was hidden
+    // would train the reader to ignore the badge.
+    const findRow = JSON.stringify(renderToolRow('bitwarden_find', { query: 'github' }, JSON.stringify({ query: 'github', matched: 1, items: [{ id: 'i1', name: 'github.com', username: 'octocat@example.com', uris: ['https://github.com/login'] }] })))
+    check('a search that found no secrets does not claim to have hidden any', !findRow.includes('密码等敏感值已隐藏'), findRow.slice(0, 220))
+    check('a search row states what it found', findRow.includes('github.com') && findRow.includes('1 条'))
+    const failRow = JSON.stringify(renderToolRow('bitwarden_status', {}, null, true))
+    check('a failed call is reported as failed', failRow.includes('调用失败'))
   }
 
   void t
