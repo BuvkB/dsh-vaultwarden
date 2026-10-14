@@ -5,7 +5,8 @@ PR：#6211「Add BuvkB/dsh-vaultwarden (security)」，分支 `add/buvkb-dsh-vau
 
 ## 当前状态
 
-- PR #6211 于 2026-09-30 提交，OPEN，checks 通过（Submission gate pass；check pass）。
+- PR #6211（v0.7.1 为止的历次更新）已 **MERGED**；此后条目变更走新 PR。
+- PR #7410「Update BuvkB/dsh-vaultwarden to v0.8.1」于 2026-10-15 提交，OPEN，只改 `data/plugins/BuvkB__dsh-vaultwarden.yml` 一个文件（分支 `update/buvkb-dsh-vaultwarden-081`，从 upstream/main 切出，非旧 fork 分支）。
 - 2026-10-01：随 v0.2.7 发版，把条目的 tarball 从 v0.2.4 更新到 v0.2.7（commit 58329e7b）。
 - 2026-10-02：随 v0.3.0 发版（密文落盘缓存 + 修订号探针），把条目的 tarball 从 v0.2.7 更新到 v0.3.0。
 - 2026-10-02：随 v0.3.1 发版（换令牌失败不再无差别删除会话），把条目的 tarball 从 v0.3.0 更新到 v0.3.1。
@@ -21,6 +22,7 @@ PR：#6211「Add BuvkB/dsh-vaultwarden (security)」，分支 `add/buvkb-dsh-vau
 - 2026-10-07：随 v0.6.1 发版（侧栏图标改为画出来的 SVG 线稿 + 计数改扁平药丸、手机端工具栏 设置/刷新 错位、验证码行 box-sizing 被切、站点图标探测不唤醒行），把条目的 tarball 从 v0.6.0 更新到 v0.6.1。
 - 2026-10-08：随 v0.7.0 发版（两处明文出口收紧：`field=all` 只回密码/用户名/网址/备注/自定义字段，TOTP 与卡号/身份信息/SSH 私钥/安全笔记正文需点名 field 单独取；`reprompt` 的门改由本人在面板输入主密码打开，`confirm: true` 布尔旁路已从工具面删除，门覆盖条目每一个字段，验证一次开 5 分钟纯内存时间窗），把条目的 tarball 从 v0.6.3 更新到 v0.7.0。
 - 2026-10-08：随 v0.7.1 发版（详情卡片头部补上站点图标——列表行走 `iconFor()` 取图标而头部直接画字母圆枕，点开条目图标就消失了；头部图标放大到 22px，`reprompt` 分支一并带出 `uris` 但门仍只挡字段），把条目的 tarball 从 v0.7.0 更新到 v0.7.1。
+- 2026-10-15：随 v0.8.0 + v0.8.1 发版（面板可编辑五类条目、转录卡片把密码等敏感值遮成圆点、齿轮图标重画、窄面板按钮不再重叠、冷启动 6222ms→1640ms），把条目的 tarball 从 v0.7.1 更新到 v0.8.1，并给 zh 描述补上编辑器与脱敏（PR #7410）。
 - 条目文件：`data/plugins/BuvkB__dsh-vaultwarden.yml`（内容与本目录 `entry.yml` 一致）。
 
 ## 后续更新条目
