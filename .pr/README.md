@@ -27,7 +27,33 @@ PR：#6211「Add BuvkB/dsh-vaultwarden (security)」，分支 `add/buvkb-dsh-vau
 
 ## 后续更新条目
 
-改动只应落在一个文件：`data/plugins/BuvkB__dsh-vaultwarden.yml`（fork 仓库 BuvkB/awesome-dsh-plugin 的 `add/buvkb-dsh-vaultwarden` 分支）。更新 tarball 指向新版本后推送即可，无需关闭重开 PR。
+**从 v0.8.1 起不再需要改条目。**
+
+条目的 tarball 已改为**不带版本号的稳定地址**：
+
+```
+https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz
+```
+
+`releases/latest/download/<name>` 由 GitHub 解析到最新 release，而资产名去掉版本号后每次发版都固定不变，所以**发新版本时这一步什么都不用做**——不再需要改 YAML、不再需要开 PR。
+
+这个做法是市场里的既有惯例：`plugins.json` 里 383 个 tarball 条目中有 132 个用的是 `latest/download` + 无版本资产名（如 `azazo1/dsh-deep-diving-back`），只有 233 个钉死版本、每次发版都要提 PR。另有 2401 个条目走 npm（`npm` 字段），由市场的 probe 自动解析 `dist-tags.latest`，同样不需要 PR——但本机没有 npm 凭据且 `dsh-vaultwarden` 在 npm 上仍为 404，故不选这条路。
+
+### 每次发版仍要做的一步
+
+上传一个去掉版本号的资产（Release 里会同时有 `dsh-vaultwarden-<ver>.tgz` 与 `dsh-vaultwarden.tgz`）：
+
+```sh
+npm pack --silent                       # 产出 dsh-vaultwarden-<ver>.tgz
+cp dsh-vaultwarden-<ver>.tgz /tmp/dsh-vaultwarden.tgz
+gh release upload <tag> /tmp/dsh-vaultwarden.tgz --clobber
+```
+
+两个资产内容完全一致（同一 sha256），带版本号的那个便于人工核对与归档，无版本号的那个供市场与 `latest` 使用。
+
+### 历史（已失效）
+
+在改用稳定地址之前，条目每次发版都靠改 `tarball:` 指向新 tag 来更新（见上表历次记录）；当时改的是 fork 分支 `add/buvkb-dsh-vaultwarden`。PR #6211 合并后该分支不再有效，v0.8.1 的更新改走了 PR #7410。**这也是最后一次需要 PR 的更新。**
 
 注意：
 - **只改这一个文件**，不要手工编辑 README（由脚本生成）。

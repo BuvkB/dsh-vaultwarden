@@ -152,12 +152,17 @@ bitwarden_restore { "id": "…" }                        → 从回收站恢复�
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-vaultwarden          # npm（发布后）
-dsh plugin --profile web add github:<owner>/dsh-vaultwarden#v0.6.1   # GitHub 源（首次需 allowBuilds）
-dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden        # 本地路径（开发）
+# 稳定地址：始终指向最新版本（市场条目用的就是它）
+dsh plugin --profile web add https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz
+
+# 钉住某个版本
+dsh plugin --profile web add https://github.com/BuvkB/dsh-vaultwarden/releases/download/v0.8.1/dsh-vaultwarden-0.8.1.tgz
+
+# 本地路径（开发）
+dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden
 ```
 
-装新 bundle 后可能需要重启 `dsh web` 才会加载；前端半边在页面刷新后出现。
+装新 bundle 后可能需要重启 `dsh web` 才会加载；前端半边在页面刷新后出现。维护者发版步骤见 [docs/release.md](docs/release.md)。
 
 ## 测试
 
