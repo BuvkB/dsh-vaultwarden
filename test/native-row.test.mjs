@@ -230,6 +230,33 @@ console.log('native row (host DisclosureRow present)')
   check('clicking the row expands it (aria-expanded flips)', expanded.includes('\"aria-expanded\":true') || expanded.includes('data-open'))
   check('the expanded body labels its argument block', expanded.includes(LABELS.toolArgs))
   check('the expanded body labels its result block', expanded.includes(LABELS.toolResult))
+  // The body must borrow the host's own type shorthand rather than pick its
+  // own sizes: the host sets ioCard's font once and lets its children inherit.
+  check("the expanded body takes the host's io card type shorthand",
+    expanded.includes('--dsw-font-markdown-code-block-small'))
+  check('the body does not hardcode its own font sizes',
+    !/"fontSize":12/.test(expanded))
+  // The payload must arrive as a STYLED span. Handing the style object in as
+  // the prop bag itself still renders the text, so the failure is silent: the
+  // declarations land as stray minwidth/whitespace/wordbreak props, and the
+  // payload wraps as one run instead of the host's pre-wrap column. Assert the
+  // mechanism, not the pixels.
+  {
+    const payload = renderer.root.findAll(
+      (node) => node.type === 'span'
+        && typeof node.props?.style?.whiteSpace === 'string'
+        && node.props.style.whiteSpace === 'pre-wrap',
+    )
+    check('the payload span carries a real style object', payload.length > 0)
+    // Read the props directly. A string match over the serialized tree cannot
+    // see this: React keeps camelCase prop names there.
+    const leaked = renderer.root.findAll(
+      (node) => node.props && (node.props.whiteSpace !== undefined
+        || node.props.minWidth !== undefined
+        || node.props.wordBreak !== undefined),
+    )
+    check('no CSS declaration leaks out as a prop', leaked.length === 0)
+  }
   check('NEGATIVE CONTROL: expanding reveals no plaintext password',
     !expanded.includes('hunter2-secret'))
   check('the password is still replaced by dots', expanded.includes('••••••••'))

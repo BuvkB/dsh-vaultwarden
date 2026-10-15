@@ -4,6 +4,17 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] — 2026-10-15
+
+### 修复
+
+- 修复工具行展开体未继承宿主卡片字体的问题，字号、行高与字族与原生工具行一致。
+- 修复工具行展开体正文样式未生效、换行塌陷成一整段的问题。
+
+### 测试
+
+- 785 项离线测试全绿（新增 4 项原生行断言：卡片字体简写、正文样式对象与属性泄漏）。
+
 ## [0.8.2] — 2026-10-15
 
 ### 优化
