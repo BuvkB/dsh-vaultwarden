@@ -2417,8 +2417,13 @@ async function main() {
     check('NEGATIVE CONTROL: the plaintext password is nowhere in the row', !rowText.includes('hunter2-secret'))
     check('the password is replaced by dots', rowText.includes('••••••••'))
     check('the identifier fields still read normally', rowText.includes('octocat@example.com') && rowText.includes('item-1'))
-    const maskedBadge = rowText.includes('密码等敏感值已隐藏')
-    check('the row says a secret was hidden', maskedBadge)
+    // The row does not announce the masking: the dots in the body are the only
+    // signal. The assertions name the WORDS a note would use, not a bare
+    // "hidden" — the serialized tree carries the inline styles, where
+    // `overflow: "hidden"` is a CSS keyword and would match every row.
+    const MASKING_NOTES = ['已隐藏', '敏感值', '脱敏', 'Passwords and other', 'secrets hidden']
+    check('the row does not advertise that it masked anything',
+      MASKING_NOTES.every((note) => !rowText.includes(note)))
 
     // A create carries the password in its ARGUMENTS, which the row also draws.
     const createRow = JSON.stringify(renderToolRow('bitwarden_create', { name: '新站点', username: 'u', password: 'arg-secret-1' }, JSON.stringify({ id: 'n1', name: '新站点', type: 'login' })))
@@ -2441,10 +2446,10 @@ async function main() {
     check('NEGATIVE CONTROL: a custom field value is masked', !fieldRow.includes('4321'))
     check('the custom field name is still readable', fieldRow.includes('PIN'))
 
-    // A search returns no secrets: claiming a mask when nothing was hidden
-    // would train the reader to ignore the badge.
+    // A search returns no secrets, so its line must read like any other row's —
+    // no masking note, because nothing was masked.
     const findRow = JSON.stringify(renderToolRow('bitwarden_find', { query: 'github' }, JSON.stringify({ query: 'github', matched: 1, items: [{ id: 'i1', name: 'github.com', username: 'octocat@example.com', uris: ['https://github.com/login'] }] })))
-    check('a search that found no secrets does not claim to have hidden any', !findRow.includes('密码等敏感值已隐藏'), findRow.slice(0, 220))
+    check('a search row carries no masking note', !findRow.includes('已隐藏'), findRow.slice(0, 220))
     check('a search row states what it found', findRow.includes('github.com') && findRow.includes('1 条'))
     const failRow = JSON.stringify(renderToolRow('bitwarden_status', {}, null, true))
     check('a failed call is reported as failed', failRow.includes('调用失败'))

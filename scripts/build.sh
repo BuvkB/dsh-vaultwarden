@@ -160,6 +160,20 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   fi
   echo "=== settings card test (browser half) ==="
   node test/client-card.test.mjs
+
+  # The transcript row's NATIVE path. The suite above runs against a page that
+  # has only `react` — its loader stub rejects every other require — so it
+  # covers the primitives-free fallback and never the branch a real user hits.
+  # This one loads the HOST's real `@deepseek-ai/dsh-client-ui-primitives`
+  # through test/host-primitives-hooks.mjs and asserts the row renders through
+  # the host's own DisclosureRow.
+  #
+  # DSH_REQUIRE_NATIVE_ROW converts its "no linked peer SDK" SKIP into a
+  # FAILURE: the links exist by this point in the script (link_pkg made them),
+  # so a missing one here means the build lost them — and a silently skipped
+  # suite would report the native row as verified without rendering it once.
+  echo "=== native tool row test (host DisclosureRow) ==="
+  DSH_REQUIRE_NATIVE_ROW=1 node test/native-row.test.mjs
 fi
 
 echo "=== build complete: $ROOT ==="

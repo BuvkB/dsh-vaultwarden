@@ -4,6 +4,18 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-10-15
+
+### 优化
+
+- 优化对话中 bitwarden 工具行的外观：改用宿主原生 DisclosureRow、官方图标集与输入/输出卡片版式，与「运行命令」等原生行一致。
+- 去掉工具行的「密码等敏感值已隐藏」提示文案，脱敏本身不变。
+
+### 测试
+
+- 781 项离线测试全绿（新增 20 项原生行测试：加载宿主真实 DisclosureRow 断言渲染与交互）。
+- 修复 peer 软链缺失时原生行测试静默跳过的问题，改为门禁中直接失败。
+
 ## [0.8.1] — 2026-10-14
 
 ### 修复
