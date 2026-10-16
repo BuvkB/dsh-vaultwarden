@@ -2455,6 +2455,65 @@ async function main() {
     check('a failed call is reported as failed', failRow.includes('调用失败'))
   }
 
+  // ── reopening the panel keeps the write tier it was configured with ───────
+  // The panel derives `accessMode` from the config the host hands it, and that
+  // state starts at 'readonly'. A reopen takes a shortcut past `boot` when the
+  // config is already in hand — and the shortcut only carried the config
+  // across, so it left the tier at its initial value: a vault configured with
+  // accessMode=ask painted no edit or create control at all, on the one path a
+  // reader takes most often. The regression is invisible to a single open,
+  // which is exactly why it survived the suite.
+  {
+    const askRpc = makeRpc({ boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION) })
+    // The tier reaches the DOM as the write controls themselves.
+    const writeControls = (renderer) => renderer.root
+      .findAll((node) => node.props && ['edit', 'archive', 'trash', 'move'].includes(node.props['data-vw-action']))
+      .map((node) => node.props['data-vw-action'])
+    // The create control is icon-only (its words live in title + aria-label),
+    // so it is found by its own attribute rather than by its text.
+    const newEntryControls = (renderer) => renderer.root
+      .findAll((node) => node.props && node.props['data-vw-new'] === '')
+      .length
+
+    mod.__resetOpenCache()
+    const first = await mountPanel(mod, {}, askRpc)
+    const firstRows = () => first.renderer.root.findAll((node) => node.props?.role === 'option')
+    await flush()
+    await act(async () => { firstRows()[0].props.onClick() })
+    await flush()
+    const firstOpen = writeControls(first.renderer).sort().join(',')
+    check('accessMode=ask: the first open offers the entry write actions', firstOpen.includes('edit'), firstOpen)
+    await act(async () => { first.renderer.unmount() })
+
+    // Reopen: `keepCache` is what makes this the reopen a reader performs —
+    // mountPanel clears the module cache by default, and clearing it would be a
+    // first open with nothing to skip, which is the case that never broke. A
+    // fresh rpc log is what makes the no-second-boot assertion meaningful.
+    const reopenCalls = askRpc.calls.length
+    const second = await mountPanel(mod, {}, askRpc, { keepCache: true })
+    const secondRows = () => second.renderer.root.findAll((node) => node.props?.role === 'option')
+    await flush()
+    await act(async () => { secondRows()[0].props.onClick() })
+    await flush()
+    const reopened = writeControls(second.renderer).sort().join(',')
+    check(
+      'accessMode=ask: reopening the panel still offers them',
+      reopened.includes('edit'),
+      reopened || '(none)',
+    )
+    check(
+      'accessMode=ask: reopening still offers 新建条目',
+      newEntryControls(second.renderer) >= 1,
+      String(newEntryControls(second.renderer)),
+    )
+    // And the shortcut really was taken: this reopen asked the host for no
+    // session — the round trip the cached config exists to avoid.
+    const bootsOnReopen = askRpc.calls.slice(reopenCalls).filter((call) => call.method === 'boot').length
+    check('reopening does not re-ask the host for a session', bootsOnReopen === 0, 'boot calls on reopen: ' + String(bootsOnReopen))
+    await act(async () => { second.renderer.unmount() })
+    mod.__resetOpenCache()
+  }
+
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
