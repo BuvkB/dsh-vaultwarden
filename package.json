@@ -11,6 +11,10 @@
   "bugs": {
     "url": "https://github.com/BuvkB/dsh-vaultwarden/issues"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
