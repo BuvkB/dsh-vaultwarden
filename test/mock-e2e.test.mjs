@@ -134,6 +134,91 @@ async function main() {
   const totpClient = new VaultClient(settingsFor(server), { now: () => 59_000 })
   const totp = JSON.parse(await totpClient.get('cipher-github', 'totp'))
   check('TOTP matches the RFC 6238 test vector', totp.totp?.code === '94287082', JSON.stringify(totp.totp))
+  // A code is only worth anything for as long as it says. Every read reports
+  // that, so a caller never has to guess whether it still has time.
+  check('a TOTP read says how long it is good for', totp.totp?.freshFor === 1 && typeof totp.totp?.remaining === 'number', JSON.stringify(totp.totp))
+
+  // --- waitFresh: never hand over a code that is about to expire --------------
+  {
+    // T=59s sits one second before the window closes, which is exactly the
+    // failure this option exists for.
+    let clock = 59_000
+    const sleeps = []
+    const freshClient = new VaultClient(settingsFor(server), {
+      now: () => clock,
+      // Stand in for the real sleep and advance the clock the way it would.
+      sleep: async (ms) => { sleeps.push(ms); clock += ms },
+    })
+    const fresh = JSON.parse(await freshClient.get('cipher-github', 'totp', undefined, { waitFresh: true }))
+    check('waitFresh waits out a window that is nearly gone', sleeps.length === 1 && sleeps[0] === 2_000, JSON.stringify(sleeps))
+    check('waitFresh returns a code with a full window left', fresh.totp?.freshFor >= 20, JSON.stringify(fresh.totp))
+    check('waitFresh returns a DIFFERENT code after the boundary', fresh.totp?.code !== '94287082', JSON.stringify(fresh.totp))
+
+    // A window with room in it must not cost a wait at all.
+    let roomyClock = 1_000
+    const roomySleeps = []
+    const roomyClient = new VaultClient(settingsFor(server), {
+      now: () => roomyClock,
+      sleep: async (ms) => { roomySleeps.push(ms); roomyClock += ms },
+    })
+    const roomy = JSON.parse(await roomyClient.get('cipher-github', 'totp', undefined, { waitFresh: true }))
+    check('waitFresh does not wait when the window is comfortable', roomySleeps.length === 0 && roomy.totp?.freshFor >= 20, JSON.stringify(roomy.totp))
+
+    // minRemaining is the caller's floor, and it is honoured. T=5s leaves 25
+    // of the 30-second window, which is under a 29-second floor.
+    let strictClock = 5_000
+    const strictSleeps = []
+    const strictClient = new VaultClient(settingsFor(server), {
+      now: () => strictClock,
+      sleep: async (ms) => { strictSleeps.push(ms); strictClock += ms },
+    })
+    const strict = JSON.parse(await strictClient.get('cipher-github', 'totp', undefined, { waitFresh: true, minRemaining: 29 }))
+    check('minRemaining raises the bar for waiting', strictSleeps.length === 1 && strict.totp?.freshFor >= 29, JSON.stringify({ sleeps: strictSleeps, totp: strict.totp }))
+  }
+
+  // --- minRemaining=0 means "do not wait", not "use the default" --------------
+  {
+    let clock = 59_000
+    const sleeps = []
+    const zeroClient = new VaultClient(settingsFor(server), { now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms } })
+    const zero = JSON.parse(await zeroClient.get('cipher-github', 'totp', undefined, { waitFresh: true, minRemaining: 0 }))
+    // 0 used to be swallowed by a `||` and became the 20-second default, so the
+    // one value a caller can use to opt out was the one value that did not work.
+    check('minRemaining=0 opts out of waiting instead of falling back', sleeps.length === 0 && zero.totp?.freshFor === 1, JSON.stringify({ sleeps, totp: zero.totp }))
+
+    let junkClock = 59_000
+    const junkSleeps = []
+    const junkClient = new VaultClient(settingsFor(server), { now: () => junkClock, sleep: async (ms) => { junkSleeps.push(ms); junkClock += ms } })
+    const junk = JSON.parse(await junkClient.get('cipher-github', 'totp', undefined, { waitFresh: true, minRemaining: 'abc' }))
+    check('a non-numeric minRemaining falls back to the default', junkSleeps.length === 1 && junk.totp?.freshFor >= 20, JSON.stringify({ sleeps: junkSleeps, totp: junk.totp }))
+  }
+
+  // --- an entry with no TOTP seed answers immediately, never sleeps -----------
+  {
+    const sleeps = []
+    const noSeedClient = new VaultClient(settingsFor(server), { now: () => 59_000, sleep: async (ms) => sleeps.push(ms) })
+    const noSeed = JSON.parse(await noSeedClient.get('cipher-db', 'totp', undefined, { waitFresh: true }))
+    check('waitFresh does not stall an entry without a TOTP seed', sleeps.length === 0 && noSeed.totp === null, JSON.stringify(noSeed))
+  }
+
+  // --- waitFresh must not touch any field other than totp --------------------
+  {
+    let clock = 59_000
+    const sleeps = []
+    const allClient = new VaultClient(settingsFor(server), { now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms } })
+    const all = JSON.parse(await allClient.get('cipher-github', 'all', undefined, { waitFresh: true }))
+    check('waitFresh is ignored for field=all', sleeps.length === 0 && all.password === 'gh-p@ssw0rd-42' && all.totp === undefined, JSON.stringify({ sleeps, keys: Object.keys(all) }))
+  }
+
+  // --- a reprompt-gated entry answers, it does not wait ----------------------
+  {
+    const repromptServer = await startMockServer({ repromptCipher: true })
+    const sleeps = []
+    const repromptClient = new VaultClient(settingsFor(repromptServer), { now: () => 59_000, sleep: async (ms) => sleeps.push(ms) })
+    const gated = JSON.parse(await repromptClient.get('cipher-reprompt', 'totp', undefined, { waitFresh: true }))
+    check('waitFresh does not wait on a reprompt-gated entry', sleeps.length === 0 && gated.repromptRequired === true && gated.totp === undefined, JSON.stringify(gated))
+    await repromptServer.close()
+  }
 
   // 5. ambiguity + not found --------------------------------------------------
   let notFound = null

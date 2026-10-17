@@ -4,6 +4,16 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] — 2026-10-17
+
+### 新增
+
+- `bitwarden_get` 新增 `waitFresh` / `minRemaining` 参数（仅对 `field=totp` 生效）：剩余时间低于门槛（默认 20 秒）时等到下一个 30 秒窗口再返回。此前取码只是瞬时快照，遇到 `remaining=1` 只能拿到必然过期的码，白耗一次提交机会；实测剩 9 秒时等 10 秒跨过边界，交出的码剩 29 秒。
+
+### 修复
+
+- `field=totp` 返回值补上 `freshFor`，明确这枚码还剩多少秒可用，不必再猜「来不来得及」。
+
 ## [0.8.5] — 2026-10-17
 
 ### 修复
