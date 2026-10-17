@@ -2076,7 +2076,10 @@ async function main() {
     check('an untouched password is not resent', !('password' in savedInput))
     check('an untouched TOTP seed is not resent', !('totp' in savedInput))
     check('the fields are flat, never nested under a patch', Object.keys(savedInput).every((key) => !['patch', 'input'].includes(key)))
-    check('the save is followed by a sync the reader can see', syncs.length === 1, String(syncs.length))
+    // The panel used to run a SECOND full sync here, after the write path had
+    // already synced — that is the wait the reader spent staring at a form that
+    // had in fact been saved. Syncing the write is the host's job now.
+    check('the save does not run a second sync of its own', syncs.length === 0, String(syncs.length))
     check('the editor reports the save', eText().includes('已保存'))
     check('the editor says the sync finished', eText().includes('已同步到服务器'))
     check('the save left the editor open on the entry', Boolean(editorNode()))
@@ -2096,6 +2099,11 @@ async function main() {
     await act(async () => { await sleep(50) })
     await act(async () => { conflicted.renderer.root.findAll((n) => n.props?.['data-vw-action'] === 'edit')[0].props.onClick() })
     await act(async () => { await sleep(50) })
+    // A field must actually change: a save that changes nothing is short-circuited
+    // to 没有改动 and never reaches the host, so there would be no conflict to report.
+    await act(async () => {
+      conflicted.renderer.root.findAllByType('input').find((n) => n.props['aria-label'] === '用户名').props.onChange({ target: { value: 'conflict@example.com' } })
+    })
     await act(async () => { conflicted.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined)[0].props.onClick() })
     await act(async () => { await sleep(60) })
     const conflictText = () => JSON.stringify(conflicted.renderer.toJSON())
@@ -2174,7 +2182,7 @@ async function main() {
     const created = writes.filter((w) => w.method === 'create').at(-1)
     check('a new entry is created with the typed name', created?.args?.input?.name === '新数据库口令', JSON.stringify(created?.args))
     check('a new entry is created as a login', created?.args?.input?.type === 'login')
-    check('a created entry is synced too', syncs.length === 2, String(syncs.length))
+    check('a created entry does not run a second sync either', syncs.length === 0, String(syncs.length))
     check('the editor closes once the entry exists', cNodeWith('data-vw-editor').length === 0)
 
     // The type selector rebuilds the form: a card entry gets card fields, and
