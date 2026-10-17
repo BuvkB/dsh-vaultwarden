@@ -2,9 +2,16 @@
 
 ## 一句话
 
-跑门禁 → 提交并推 main → 打 tag → `npm pack` → 建 Release 并**同时上传带版本号与不带版本号两个资产** → 四道复验。
+跑门禁 → 提交并推 main → 打 tag → `npm publish` → `npm pack` → 建 Release 并**同时上传带版本号与不带版本号两个资产** → 四道复验。
 
-**市场条目不需要再动。** v0.8.1 起条目的 tarball 指向 `releases/latest/download/dsh-vaultwarden.tgz`（不带版本号的稳定资产名），GitHub 会自动解析到最新 release，因此发新版本不再产生市场 PR。
+**市场条目不需要再动，但 npm 必须发。** v0.8.1 起条目的 tarball 指向 `releases/latest/download/dsh-vaultwarden.tgz`（不带版本号的稳定资产名），GitHub 会自动解析到最新 release，因此发新版本不再产生市场 PR。
+
+**但「发版即自动更新」还依赖 npm。** 市场判断某条目有没有新版本时，走的是 `dsh-market` 的 `lib/updates.js`：目录条目的 `npm` 字段有值时，才拿 registry 的 `dist-tags.latest` 和用户已装版本比较。目录的 `npm` 字段来自 `awesome-dsh-plugin` 每天 02:23 UTC 的 `probe-npm.mjs`——它读仓库 `package.json` 的 `name`，再去 registry 校验 `repository` 是否指回本仓库。所以：
+
+- 只推 GitHub、不发 npm → 目录 `npm` 恒为 null → **用户永远看不到更新提示**，只能手动重装；
+- 发了 npm → 次日构建回填 → 更新角标生效。
+
+条目里**不要**手写 `npm:` 字段，收录指南明确说会被校验拒绝，映射自动采集。
 
 ## 详细步骤
 
@@ -21,11 +28,15 @@ git push origin main
 # 3. 打 tag 并推送（务必先让 tag 指向最终 commit，推完不要再移动）
 git tag -a v0.8.2 -m 'v0.8.2：...' && git push origin v0.8.2
 
-# 4. 打包
+# 4. 发布到 npm（市场更新提示的来源，漏了这一步用户就看不到更新）
+npm publish                            # 需要 ~/.npmrc 里的 npmjs token
+npm view dsh-vaultwarden version       # 确认 latest 已是新版本
+
+# 5. 打包
 npm pack --silent                      # -> dsh-vaultwarden-0.8.2.tgz
 sha256sum dsh-vaultwarden-0.8.2.tgz
 
-# 5. 建 Release，两个资产都传
+# 6. 建 Release，两个资产都传
 cp dsh-vaultwarden-0.8.2.tgz /tmp/dsh-vaultwarden.tgz
 gh release create v0.8.2 \
   --title 'v0.8.2：...' \
