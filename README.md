@@ -18,7 +18,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → `/api/sync` 重同步 + 解密换缓存（Vaultwarden 的同步接口没有增量参数，只有全量）；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
-| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段；默认不含密码，也不含归档与回收站）、`bitwarden_get`（默认 `field=all` 只回密码/用户名/网址/备注/自定义字段；TOTP 验证码与银行卡/身份信息/安全笔记/SSH 私钥需点名 `field=totp` / `card` / `identity` / `secureNote` / `sshKey` 单独取）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
+| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段；默认不含密码，也不含归档与回收站）、`bitwarden_get`（默认 `field=all` 只回密码/用户名/网址/备注/自定义字段；TOTP 验证码与银行卡/身份信息/安全笔记/SSH 私钥需点名 `field=totp` / `card` / `identity` / `secureNote` / `sshKey` 单独取；取 TOTP 可加 `waitFresh` 等一个至少剩 `minRemaining` 秒（默认 20）的窗口，避免拿到马上就要过期的码）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
 | 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查凭据库，而不是先问用户 |
 | 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：12 个字段（服务器/邮箱/主密码/API 密钥/同步与缓存开关/权限档/会话天数），密钥字段为只写 |
 | 条目浏览面板 | 设置 → 凭据库 独立页面：**层级分区菜单**（全部条目/收藏/验证码 + 类型分组 + 文件夹分组 + 未归类 + 归档/回收站，每行带**画出来的 SVG 线稿图标**与扁平计数药丸，切回刚看过的分区**不重新加载**）+ 搜索、列表、详情、复制、TOTP 圆环倒计时（弧随剩余时间缩短，色从绿经橙渐变到红）、reprompt 条目受保护；列表行显示**服务端缓存的站点图标**（取不到就退回首字母圆枕）；**验证码分区行** = 图标 + 名称 + 用户名 + 圆环 + 6 位码 + 复制；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）各自的详情字段、附件与密码历史折叠区；`accessMode` 非 readonly 时详情底部出现**写操作**（归档/取消归档、移入回收站、恢复、移动文件夹，逐个二次确认）；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误 |
@@ -67,7 +67,10 @@ bitwarden_find    { "query": "github" }                → 条目列表（元信
 bitwarden_find    { "query": "旧", "includeTrashed": true, "includeArchived": true }
                                                        → 连回收站与归档一起列（默认都不列）
 bitwarden_get     { "id": "…", "field": "password" }   → 用户名 + 密码
-bitwarden_get     { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码
+bitwarden_get     { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码（返回值 freshFor 是这枚码还剩多少秒）
+bitwarden_get     { "id": "…", "field": "totp", "waitFresh": true } → 等一个可用窗口再给码（默认至少剩 20 秒）
+bitwarden_get     { "id": "…", "field": "totp", "waitFresh": true, "minRemaining": 25 }
+                                                       → 自定义门槛；传 0 表示不等待
 bitwarden_get     { "id": "…" }                          → field=all：密码/用户名/网址/备注/自定义字段
 bitwarden_get     { "id": "…", "field": "card" }       → 卡号等，另外 identity / secureNote / sshKey 同理
 bitwarden_status  { "refresh": true }                  → 状态报告（含 liveSync / 条目/归档/回收站条数 / 最近一次会话事件）
@@ -82,6 +85,28 @@ bitwarden_delete  { "id": "…" }                        → 软删进回收站�
 bitwarden_delete  { "id": "…", "permanent": true, "confirm": true } → 彻底删除（不可逆，必须带 confirm）
 bitwarden_restore { "id": "…" }                        → 从回收站恢复（需 accessMode=ask/auto）
 ```
+
+### 取 TOTP 为什么需要 waitFresh
+
+动态码只有 30 秒有效，而模型拿到码之后还要再发起一次工具调用才能填进表单——这一来一回要花真实时间。取到一个只剩 1 秒的码，等于没取到：提交必然失败，在限制尝试次数的站点上还白白消耗一次机会。
+
+`waitFresh: true` 在取码这一侧解决它：剩余时间不够就**先等到下一个窗口**，再把码交出去。
+
+```
+bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
+→ { "totp": { "code": "…", "remaining": 29, "freshFor": 29, … } }
+```
+
+`freshFor` 是这枚码还能用多久，调用方据此判断来不来得及。
+
+**只有"码存在且即将过期"才会等。** 下面这些情况一律立即返回，不会傻等：
+
+| 情况 | 表现 |
+| --- | --- |
+| 条目没有 TOTP 种子 | 直接返回 `totp: null` |
+| 条目开了「重新验证」且未解锁 | 返回 `repromptRequired: true` |
+| `field` 不是 `totp` | `waitFresh` 被忽略 |
+| `minRemaining: 0` | 不等，立即返回（哪怕只剩 1 秒） |
 
 ## 用法（人侧）
 
