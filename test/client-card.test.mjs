@@ -2463,6 +2463,77 @@ async function main() {
     check('a failed call is reported as failed', failRow.includes('调用失败'))
   }
 
+  // ── the DETAIL pane masks what it holds ───────────────────────────────────
+  // The transcript row was always careful; the pane next to it was not. A note
+  // body and every custom-field value were painted as plain text the moment the
+  // entry was opened, so a PIN held in a "hidden" custom field and the body of
+  // a secure note were on screen for anyone who walked past — and in any
+  // screenshot of the panel. Both now start as dots behind the same reveal
+  // toggle a card number uses.
+  {
+    const detailReveal = {
+      id: 'item-notes', name: '运维笔记', type: 'login', username: 'ops@example.com',
+      password: 'detail-pass-1', hasTotp: false, hasNotes: true,
+      notes: 'NOTE-BODY-SECRET',
+      fields: [{ name: 'PIN', value: '4321' }, { name: '租户', value: 'jindom' }],
+      uris: [], collections: [], folder: null,
+    }
+    const detailRpc = makeRpc({
+      list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-notes', name: '运维笔记', type: 'login', username: 'ops@example.com', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: true, customFields: ['PIN', '租户'], favorite: false }] } }),
+      reveal: () => ({ ok: true, value: detailReveal }),
+    })
+    const panel = await mountPanel(mod, {}, detailRpc)
+    const dText = () => JSON.stringify(panel.renderer.toJSON())
+    const dButtons = () => panel.renderer.root.findAllByType('button')
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.role === 'option')[0].props.onClick() })
+    await flush()
+    check('opening an entry does not print its note body', !dText().includes('NOTE-BODY-SECRET'), dText().slice(0, 240))
+    check('opening an entry does not print its custom field values', !dText().includes('4321') && !dText().includes('jindom'))
+    check('the custom field name is still readable in the pane', dText().includes('PIN') && dText().includes('租户'))
+    check('the masked rows carry a reveal control', dButtons().filter((node) => node.props.children === '显示').length >= 3, String(dButtons().filter((node) => node.props.children === '显示').length))
+    // One click on the note's own toggle reveals that row and nothing else.
+    // Walk the element tree by hand: a field row's children include component
+    // instances, and JSON.stringify on a fiber throws on its circular parent.
+    const textOf = (node) => {
+      if (node == null) return ''
+      if (typeof node === 'string' || typeof node === 'number') return String(node)
+      if (Array.isArray(node)) return node.map(textOf).join('')
+      return textOf(node.children)
+    }
+    const fieldRowLabelled = (label) => panel.renderer.root
+      .findAll((node) => node.props?.['data-vw-field'] !== undefined)
+      .find((node) => textOf(node).startsWith(label))
+    const noteToggle = () => fieldRowLabelled('备注').findAllByType('button').find((node) => node.props.children === '显示')
+    await act(async () => { noteToggle().props.onClick() })
+    check('the note body reveals on demand', dText().includes('NOTE-BODY-SECRET'))
+    check('revealing the note does not reveal the custom fields', !dText().includes('4321'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a re-prompt entry has no code to show, anywhere ───────────────────────
+  // The 验证码 list was the one read surface that skipped the master-password
+  // gate: it asked vw/totp for every row, and a gated entry answered with a
+  // live code. The host refuses now; the row must render that refusal as a
+  // label and must stop asking every second for a code it cannot have.
+  {
+    const gatedRpc = makeRpc({
+      list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-gated', name: '需重新验证', type: 'login', username: null, uris: [], folder: null, collections: [], hasTotp: true, hasNotes: false, customFields: [], favorite: false }] } }),
+      totp: () => ({ ok: true, value: { id: 'item-gated', name: '需重新验证', repromptRequired: true } }),
+    })
+    const panel = await mountPanel(mod, {}, gatedRpc)
+    const navRow = (key) => panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === key)[0]
+    await act(async () => { navRow('totp').props.onClick() })
+    await flush(120)
+    const gText = () => JSON.stringify(panel.renderer.toJSON())
+    check('a gated code row shows a label, not a code', gText().includes('需重新验证'))
+    check('a gated code row offers no copy control', panel.renderer.root.findAll((node) => node.props?.['data-vw-totp-copy'] !== undefined).length === 0)
+    const asksBefore = gatedRpc.calls.filter((call) => call.method === 'totp').length
+    await flush(1100)
+    const asksAfter = gatedRpc.calls.filter((call) => call.method === 'totp').length
+    check('a gated code row stops polling every second', asksAfter === asksBefore, `${asksBefore} -> ${asksAfter}`)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   // ── reopening the panel keeps the write tier it was configured with ───────
   // The panel derives `accessMode` from the config the host hands it, and that
   // state starts at 'readonly'. A reopen takes a shortcut past `boot` when the

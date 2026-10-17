@@ -125,6 +125,7 @@ async function main() {
     gateway.getClient = () => gatewayClient
     gateway.createClient = () => gatewayClient
     gateway.owner = { getSettings: () => settings, update: async () => {} }
+    gateway.guard = () => null
     gateway.mutations = null
     gateway.pendingProbe = null
     gateway.pendingPatch = null

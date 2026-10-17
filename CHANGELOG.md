@@ -4,6 +4,22 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] — 2026-10-17
+
+### 安全
+
+- **TOTP 读取曾绕过「重新验证」门禁**：`vw/totp` → `totpEntry()` 直接从种子算码，完全不查 reprompt 授权，而同族路径（`get()`、`draftEntry()`、`getFreshTotp()`）都查。面板「验证码」分区每一行都在调它（每秒一次），等于开了「重新验证」的条目把实时二次验证码交给任何走到屏幕前的人。现在与其它字段同一道门：没有主密码证明时返回 `repromptRequired`，面板显示「需重新验证」而不是码。
+- **面板 RPC 曾可自行提升写权限**：`vw/configure` 接受 `accessMode`，而门禁闭包读的是同一份实时设置——一次面板调用就能把 `readonly` 抬到 `auto`，进而让**模型工具**开始无审批写入每一个凭据。该参数不再生效（签名保留但忽略），只能在 DSH 设置里改。
+- **RPC 侧的彻底删除已移除**：`vw/remove` 以前接受 `permanent` + `confirm`，两个布尔由同一个调用方在同一次调用里给出，"不可逆且经人确认"实际是"自己确认自己"。彻底删除现在只有 `bitwarden_delete` 工具能发起（`ask` 档带真实审批），面板与 RPC 只能移入回收站。
+- **面板曾明文展示自定义字段与备注正文**：打开条目就把每条自定义字段的值、每条备注的正文渲染成文本节点。Bitwarden 的 hidden 字段专放 PIN、API key、恢复码，安全笔记正文常常是某个凭据的唯一副本——现在与卡号、SSH 私钥同一档：默认圆点，点「显示」才展开，复制按钮不必展开即可用。
+- **授权到期会收回已展开的明文**：reprompt 的 5 分钟窗口以前只在轮询里更新一个数字，已展开的密码/卡号/私钥、已取回的窄字段、打开着的编辑器都不会关。现在窗口一失效就收起。
+- **编辑器保存后不再长期持有整条明文**：编辑保存后基线仍是宿主返回的完整 draft（含 `passwordHistory` 里每一条旧密码），一直留在 React state 里。现在改用表单值重建基线，并清空密码/TOTP 输入。
+- **剪贴板 20 秒后自动清除**：复制密码/验证码/私钥后以前只改按钮文案，系统剪贴板里的值永久留存（剪贴板管理器、其它应用都能读）。现在写入后定时回读，确认仍是自己写的那一段才清除——读者中途复制了别的东西就不动。
+- **本地快照过期即擦除**：`localStorage` 里的列表快照（条目名、用户名、网址、自定义字段名）过期只返回 null 不删除，切换账号时也只在内存里丢弃。现在过期即删、账号不匹配即删。
+- **`vw/config` 不再回传会话文件绝对路径**：这条元数据给出了数据目录与会话落点，面板渲染用不到。
+- **`passwordHistory` 不再随 `field=all` 明文返回**：历史密码每一条都可能仍能登录同一账号。`all` 只回 `passwordHistoryCount` 与时间，取明文需 `field=passwordHistory`。
+- **写入层缺门禁时拒绝构造**：`VaultMutations` 缺 `guard` 以前等于放行，现在直接抛 `guard_missing`（测试显式传 `guard: () => null` 表示"不限制"）。彻底删除的 confirm 检查也移到任何网络调用之前。
+
 ## [0.8.6] — 2026-10-17
 
 ### 新增
@@ -487,150 +503,3 @@ Panel copy and phone layout. No breaking changes.
   "Bitwarden / Vaultwarden 凭据库" spent the whole heading on two product
   names. Vaultwarden support now rides alongside in small type
   (`（支持 Bitwarden / Vaultwarden）`), which says the same thing without
-  shouting it. The English dictionary matches.
-- **The search box only says what it searches.** The placeholder also carried
-  the keyboard shortcuts, and on a phone that text was truncated before it
-  finished. It is now `搜索名称、用户名或网址`, with `/`, Esc and ↑↓ moved to
-  the input tooltip, where they stay reachable without competing for space.
-
-### Fixed
-
-- **Phone layout.** Below 560px the search box takes its own row, field rows
-  stack their label above the value so long URLs and notes keep the full
-  width, and the detail card tightens its padding. Driven by a scoped media
-  query over markers on the elements that need re-flowing.
-- **Every list tile showed the same glyph.** Entries named after a host
-  (`10.0.0.10`, `…:9443`) showed `1` in every row. The monogram now takes
-  the first letter found across name, username and URI host, so those rows
-  read as distinct entries at a glance.
-
-### Tests
-
-- 221 offline tests across seven suites (`bash scripts/build.sh`).
-
-## [0.2.2] — 2026-09-29
-
-A fresh install could not be set up from the panel. No breaking changes.
-
-### Fixed
-
-- **A new install was stuck on "尚未配置完成" and could never reach the
-  guided setup form.** The panel opens with `vw/config`, and that call
-  rejected on an unconfigured install: the payload reports the session store
-  through `VaultClient.sessionPersistence`, whose getter keyed the stored
-  session by `serverUrl` — empty before setup — and `normalizeServerUrl("")`
-  raises `not_configured`. The exception took the whole config payload down,
-  so the panel rendered an error wall whose only control was a 重试 button
-  that re-ran the same failing request. The getter now reports "nothing
-  stored" instead of throwing when no server is configured. This is the path
-  a first install takes, so it affected every new user.
-- **A failed `vw/config` no longer hides the setup form.** The form is the
-  only way out of an unconfigured state, so it is now rendered from the
-  configuration state alone: whatever makes the read fail, the fields come up
-  empty with the reason shown above them, instead of a dead end.
-
-### Tests
-
-- Two regression suites for the report above: the gateway now asserts that a
-  fresh install can read its config (the wiring mirrors `lib/index.js`, with a
-  real `SessionStore` — without a store the getter returned early, which is
-  why the existing tests passed), and the panel asserts that a failing config
-  RPC still offers the setup form.
-- 214 offline tests across seven suites (`bash scripts/build.sh`).
-
-## [0.2.1] — 2026-09-29
-
-Panel responsiveness and release polish. No breaking changes.
-
-### Fixed
-
-- **Reopening the panel no longer re-loads everything.** Each open re-ran
-  `config` → `session` → `list` → `status`, and `status()` performs a
-  `/api/config` network round trip (measured **380–830 ms** against a real
-  Vaultwarden) whose only useful output is the server version string. Three
-  layers of caching now sit in front of that:
-  - the reachability probe is reused for 5 minutes (a forced refresh still
-    always re-probes),
-  - `findEntries` is memoised per `(query, limit)` and dropped whenever the
-    vault is replaced,
-  - a module-level cache survives the panel unmounting, so a reopen paints the
-    previous list immediately and refreshes quietly behind it. A failed
-    background refresh never replaces a view the user is already reading, and
-    the cache is keyed by `serverUrl` + `email` so switching accounts cannot
-    show one vault's entries for another.
-- **A reload loop that wiped user input.** `readVault` had been given
-  `state.status` as a dependency, so every status change rebuilt `load()`,
-  which re-ran the mount effect — an endless reload. The status is now read
-  through a ref, which gives the same answer without the churn.
-
-### Added
-
-- Panel screenshots (`assets/`) plus `screenshots.json`, so storefronts show
-  the list and detail views in both themes. The published images are
-  anonymised: real usernames, emails and addresses were replaced with demo
-  values, while layout and colour are the genuine render.
-
-### Tests
-
-- 207 offline tests across seven suites (`bash scripts/build.sh`).
-
-## [0.2.0] — 2026-09-29
-
-First public release as an **independent project** (not a fork). It talks to the
-Bitwarden/Vaultwarden REST + SignalR protocols directly: no `bw` CLI, no runtime
-dependencies beyond an optional `hash-wasm` (Argon2id KDF).
-
-### Added
-
-- **WebSocket real-time sync** — subscribes to `/notifications/hub` (SignalR),
-  debounces bursts by 400 ms, then pulls `/api/sync` and re-decrypts the cache.
-  Falls back to polling when the hub is unreachable and **periodically retries
-  upgrading back** to WebSocket; honours `LogOut` notifications; backs off on
-  429.
-- **Write-back** — `bitwarden_create` / `bitwarden_update` / `bitwarden_delete`
-  (soft delete by default, `permanent` to purge), personal items only.
-- **Entry browser panel** — a settings page with search, a hierarchical
-  list → detail flow, copy buttons, live TOTP countdown, and a reprompt gate for
-  entries that require re-verification.
-- **Three write-permission tiers** — `readonly` (default, refuses every write),
-  `ask` (each write goes through the host approval seam; denied when no approval
-  channel is composed), `auto` (writes directly).
-- **Guided setup + sign-in forms** — server URL, email, master password, and an
-  optional sign-in method switch to **API key** (`user.<uuid>` + secret), which
-  bypasses two-factor. Credentials are verified before being stored, and only
-  changed fields are written.
-- **Two-factor login** — password is verified first; the code screen is reached
-  only afterwards. A rejected code keeps the user on that screen to retry, and
-  the challenge is refreshed automatically when it expires.
-- **Session persistence** (`sessionDays`, default 30) — the token, refresh token
-  and derived master key are stored in
-  `~/.dsh/data/dsh-vaultwarden/session.json` (`0600`), so plugin and harness
-  restarts no longer require a password or a new code. Expiry is **idle-based**:
-  every use slides the window, and only 30 idle days invalidate it. Set `0` to
-  disable.
-- **Clickable sync chip** — click to sync immediately; hover for sync mode,
-  connection state, poll interval, last signal/sync times and the last error.
-- Six global tools — `bitwarden_find`, `bitwarden_get`, `bitwarden_status`,
-  `bitwarden_sync`, plus the three write tools — and a system-prompt section that
-  teaches every session to consult the vault before asking the user.
-
-### Security
-
-- The panel reads through the authenticated `/api` connection RPC channel
-  (`vw/*`); the plugin deliberately serves **no HTTP route of its own**, so it
-  cannot bypass the operator's session.
-- Secret fields (master password, API key secret) are marked `secret`: never
-  echoed back to the UI, never written to logs.
-- WebAuthn / passkeys are **not supported**: they require a browser and a user
-  gesture on an authenticator, which a headless process cannot perform. Use an
-  API key instead — it bypasses two-factor entirely.
-
-### Notes
-
-- `peerDependencies` enumerate the published DSH release lines
-  (`^0.1.0-0 || … || ^0.2.0-0`) with an explicit prerelease branch per tuple,
-  because npm admits a prerelease only through a comparator carrying the same
-  `major.minor.patch`. See the 0.2.4 entry above.
-- Verified against Vaultwarden 2026.6.0 (`/notifications/hub` reachable,
-  two-factor account, 431 entries).
-- 204 offline tests across seven suites (`bash scripts/build.sh`).

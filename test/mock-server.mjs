@@ -278,6 +278,9 @@ export async function buildFixtures(options = {}) {
       login: {
         username: encryptString('reprompt-user', userKey),
         password: encryptString('reprompt-pass-9', userKey),
+        // A seed too: the case that mattered is a reprompt entry that also
+        // carries a second factor, because the TOTP read used to skip the gate.
+        totp: encryptString(RFC_URI, userKey),
       },
       fields: [],
       revisionDate: '2026-01-07T03:04:05.000Z',

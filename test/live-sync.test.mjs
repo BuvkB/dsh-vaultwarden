@@ -130,6 +130,14 @@ async function main() {
   // master password typed by the user in the panel opens this entry.
   const flag = JSON.parse(await client.get('cipher-reprompt', 'password', undefined, { confirm: true }))
   check('a confirm flag no longer opens the gate', flag.repromptRequired === true && !('password' in flag), JSON.stringify(flag))
+  // The TOTP read used to be the one door the gate did not cover: it generated
+  // a code straight from the seed, so a "re-verify" entry handed out live
+  // second factors to anyone at the screen (the panel polls it per row). A code
+  // is 30 s of a real credential, i.e. exactly what the gate withholds.
+  const gatedTotp = await client.totpEntry('cipher-reprompt')
+  check('a reprompt entry yields no TOTP code without the master password', gatedTotp.repromptRequired === true && gatedTotp.totp === null, JSON.stringify(gatedTotp))
+  const gatedFresh = JSON.parse(await client.get('cipher-reprompt', 'totp', undefined, { waitFresh: true, minRemaining: 0 }))
+  check('the waited TOTP read is gated too', gatedFresh.repromptRequired === true && !('totp' in gatedFresh) || gatedFresh.totp === undefined, JSON.stringify(gatedFresh))
   const wrong = await client.authorizeReprompt('not the master password')
   check('a wrong master password is refused', wrong.authorized === false)
   check('a refused check leaves the gate shut', JSON.parse(await client.get('cipher-reprompt', 'password')).repromptRequired === true)
@@ -139,6 +147,10 @@ async function main() {
   check('a verified entry reveals', granted.password === 'reprompt-pass-9', JSON.stringify(granted))
   const notes = JSON.parse(await client.get('cipher-reprompt', 'notes'))
   check('the gate covers notes too', !notes.repromptRequired, JSON.stringify(notes))
+  // …and the same proof opens the TOTP read, which is what makes the gate
+  // usable rather than merely strict.
+  const openTotp = await client.totpEntry('cipher-reprompt')
+  check('a proven master password opens the TOTP read', !openTotp.repromptRequired && typeof openTotp.totp?.code === 'string', JSON.stringify(openTotp))
 
   // 7. stable, deterministic device identity ------------------------------------
   const ids = new Set(server.stats.deviceIdentifiers)

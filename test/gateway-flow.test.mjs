@@ -59,6 +59,10 @@ function makeGateway(serverUrl, stored) {
   // from candidate settings that have not been written yet.
   gateway.createClient = (override) => new VaultClient(override ? { serverUrl, ...settings, ...override } : { serverUrl, ...settings })
   gateway.owner = owner
+  // The write gate the host injects (lib/index.js passes `writeGuard`); this
+  // test drives the RPC mechanics, so it says "no restriction" out loud rather
+  // than leaving the layer unguarded, which is now a construction error.
+  gateway.guard = () => null
   gateway.mutations = null
   gateway.pendingProbe = null
   gateway.pendingPatch = null
@@ -268,6 +272,22 @@ async function main() {
     check('remove() soft-deletes into the trash', removed?.deleted === true && removed?.permanent === false, JSON.stringify(removed))
     check('remove() says how to undo it', /bitwarden_restore/.test(String(removed?.hint ?? '')), String(removed?.hint))
 
+    // The wire used to carry `permanent` + `confirm`, which made the delete gate
+    // self-satisfied: one caller passed both in one call, so "irreversible,
+    // confirmed by a human" was really "confirmed by itself". The parameters are
+    // gone from the signature, which is the strong form: the RPC descriptor is
+    // derived from the parameter list, so a purge request is refused before it
+    // reaches this code (a live host answers
+    // "args fields do not match the descriptor: unexpected "permanent", "confirm"").
+    const params = VaultGateway.prototype.remove.toString()
+    const declared = params.slice(params.indexOf('(') + 1, params.indexOf(')')).split(',').map((part) => part.trim()).filter(Boolean)
+    check('vw/remove declares exactly one wire parameter', declared.length === 1 && declared[0] === 'id', declared.join(','))
+    const forced = await gateway.remove('cipher-legacy', true, true)
+    check('an RPC purge request is answered with a trash, not a purge', forced?.permanent === false && /bitwarden_restore/.test(String(forced?.hint ?? '')), JSON.stringify(forced))
+    const stillThere = server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-legacy')
+    check('the forced-purge target still exists on the server', Boolean(stillThere), 'row vanished')
+    await gateway.restore('cipher-legacy')
+
     const hiddenTrash = await gateway.list('', 50, 0, true, false)
     check('a read without the trash flag hides the trashed entry', hiddenTrash?.items?.length === 3 && !hiddenTrash.items.some((item) => item.id === 'cipher-db'), String(hiddenTrash?.items?.length))
     const withTrash = await gateway.list('', 50, 0, true, true)
@@ -393,6 +413,7 @@ async function main() {
       gateway.getClient = () => nextClient
       gateway.createClient = (override) => new VaultClient({ ...settings, ...overrides, ...override }, { sessionStore: store })
       gateway.owner = owner
+      gateway.guard = () => null
       gateway.mutations = null
       gateway.pendingProbe = null
       gateway.pendingPatch = null
@@ -481,6 +502,7 @@ async function main() {
     gateway.getClient = () => client
     gateway.createClient = (override) => new VaultClient({ ...editorSettings, ...override, sessionStore: store })
     gateway.owner = { getSettings: () => ({ email: EMAIL, accessMode: 'auto' }), update: async () => {} }
+    gateway.guard = () => null
     gateway.mutations = null
     gateway.pendingProbe = null
     gateway.pendingPatch = null

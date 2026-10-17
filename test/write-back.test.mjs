@@ -53,7 +53,7 @@ async function main() {
   }
   const client = new VaultClient(settingsFor(server))
   await client.unlock()
-  const mutations = new VaultMutations(client)
+  const mutations = new VaultMutations(client, { guard: () => null })
   const row = (id) => server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === id)
 
   // 1. P0-4: a concurrent edit is refused, not overwritten ----------------------
@@ -145,7 +145,22 @@ async function main() {
   check('archivedDate survives an unrelated edit (P0-2)', after.archivedDate === before.archivedDate)
   check('the item key is reused, not rotated (P0-2)', after.key === before.key)
   const richRead = JSON.parse(await client.get('cipher-rich'))
-  check('the decrypted projection agrees', richRead.hasFido2 === true && richRead.passwordHistory?.[0]?.password === 'rich-pass-0' && richRead.archived === true && richRead.uris?.length === 2)
+  // `all` no longer hands over retired passwords: each one is a credential that
+  // may still open the account, so it now follows the same rule as the card
+  // number and the SSH key — `all` reports that the history exists (and when),
+  // and the material needs `field: 'passwordHistory'`.
+  check(
+    'the decrypted projection agrees',
+    richRead.hasFido2 === true &&
+      richRead.passwordHistoryCount === 1 &&
+      richRead.passwordHistory?.[0]?.password === undefined &&
+      richRead.passwordHistory?.[0]?.lastUsedDate !== undefined &&
+      richRead.archived === true &&
+      richRead.uris?.length === 2,
+    JSON.stringify(richRead.passwordHistory),
+  )
+  const richHistory = JSON.parse(await client.get('cipher-rich', 'passwordHistory'))
+  check('the narrow read still hands over the retired passwords', richHistory.passwordHistory?.[0]?.password === 'rich-pass-0', JSON.stringify(richHistory.passwordHistory))
   check('the edited note is readable', richRead.notes === '改过的备注')
 
   // rewriting the uri list keeps the match policy and re-syncs the singular copy

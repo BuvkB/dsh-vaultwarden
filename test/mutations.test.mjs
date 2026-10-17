@@ -40,7 +40,10 @@ async function main() {
   }
   const client = new VaultClient(settingsFor(server))
   await client.unlock()
-  const mutations = new VaultMutations(client)
+  // The layer now refuses to exist without a gate (that is the point of
+  // `guard_missing`); this test exercises the write mechanics, not the
+  // permission tiers, so it says "no restriction" out loud.
+  const mutations = new VaultMutations(client, { guard: () => null })
 
   // 1. create ------------------------------------------------------------------
   const created = await mutations.create(
