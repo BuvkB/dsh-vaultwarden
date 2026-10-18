@@ -4,6 +4,23 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] — 2026-10-18
+
+### 新增
+
+- 面板标题行改为「Vaultwarden 凭据库 + dsh-vaultwarden + 版本号 + GitHub 链接」，版本号与仓库地址由构建时从 package.json 写入、宿主 boot 回报时以宿主为准。
+- 侧栏与条目图标按宿主图标语言重绘：16 网格、1px 描边、0.16 淡体块，视觉框统一留白。
+- 新增统一徽章体系：19px / 11px / 全圆角 / 扁平无描边，按语义分蓝绿琥珀灰墨五档，底色取宿主状态 tertiary 色并随主题翻转。
+
+### 修复
+
+- 修复移动端字段行竖排规则从未生效：620px 标签列规则排在 480px 之后且特异性相同，导致密码掩码折两行、显示/复制按钮漂出卡片。
+- 修复面板横向溢出：滚动区负边距使其始终比列宽多 4px，改用 scrollbar-gutter；侧栏与列表项补 border-box。
+- 修复手机窄面板下详情头部与操作按钮溢出卡片。
+- 修复「显示」与「复制」按钮高度字号不一致（28/30/32px 三套字面量）。
+- 修复字段行未顶端对齐，标签与控件随值长度漂移。
+- 修复掩码点在窄屏折成两行。
+- 修复标题行折行时只拆下半截（包名留在上行、版本号落到下行）；改为标题组与元信息组整体换行。
 ## [0.8.7] — 2026-10-17
 
 ### 安全

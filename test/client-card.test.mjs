@@ -158,8 +158,15 @@ const CONFIG_VALUE = { serverUrl: 'https://vault.example.com', email: 'me@exampl
 const AUTHED_SESSION = { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true }
 /** `boot`'s view of a session the host could not revive. */
 const SIGNED_OUT_SESSION = { configured: true, authenticated: false, pendingTwoFactor: false, unlocked: false }
+/**
+ * What the host reports about itself on `boot`: the installed manifest's
+ * identity. The panel's title row shows the version from here, so the fixture
+ * has to carry one — a boot answer without it is the shape of an OLDER host,
+ * which is covered separately below.
+ */
+const PLUGIN_IDENTITY = { name: 'dsh-vaultwarden', version: '0.8.7', repository: 'git+https://github.com/BuvkB/dsh-vaultwarden.git' }
 /** One `boot` answer, shaped the way the gateway returns it. */
-const bootWith = (config, resumed, session) => ({ ok: true, value: { config, resumed: Boolean(resumed), session } })
+const bootWith = (config, resumed, session, plugin = PLUGIN_IDENTITY) => ({ ok: true, value: { config, resumed: Boolean(resumed), session, plugin } })
 
 /**
  * The rows one sidebar place holds, narrowed the way the host narrows them.
@@ -288,7 +295,7 @@ function makeRpc(overrides = {}) {
       // is why a restart (or an expired access token) demanded a password
       // again. Tests that need the sign-in screen override this with
       // `resumed: false`.
-      if (method === 'boot') return { ok: true, value: { config: CONFIG_VALUE, resumed: true, session: AUTHED_SESSION } }
+      if (method === 'boot') return { ok: true, value: { config: CONFIG_VALUE, resumed: true, session: AUTHED_SESSION, plugin: PLUGIN_IDENTITY } }
       if (method === 'submitTwoFactor') return { ok: true, value: { ok: true, items: 3 } }
       return { ok: false, error: { code: 'not_found', message: `vw.${method} unknown` } }
     },
@@ -411,7 +418,22 @@ async function main() {
     })
     const labelJson = JSON.stringify(labelRenderer.toJSON())
     check('panel label comes from the dictionary', labelJson.includes('凭据库'), labelJson.slice(0, 120))
-    check('the settings label carries the vault glyph', labelJson.includes('vw-nav-glyph') && labelJson.includes('M8 1.7 13.8 3.7V8'), labelJson.slice(0, 120))
+    // The label's glyph must be present and must be DRAWN in the host's icon
+    // language — a 16-unit grid at a 1px stroke, with a tinted body. Asserting
+    // the exact path string coupled this check to one drawing, so a redesign
+    // of the shield (which is what the host-language pass was) failed it for
+    // no reason. These assertions describe the contract instead.
+    check('the settings label carries the vault glyph', labelJson.includes('vw-nav-glyph'), labelJson.slice(0, 120))
+    check(
+      'the label glyph is drawn in the host icon language (16 grid, 1px stroke)',
+      labelJson.includes('"viewBox":"0 0 16 16"') && labelJson.includes('"strokeWidth":1'),
+      labelJson.slice(0, 200),
+    )
+    check(
+      'the label glyph carries a tinted body like the host icons do',
+      labelJson.includes('"fillOpacity":0.16'),
+      labelJson.slice(0, 200),
+    )
     check('the settings label is marked for the gear replacement', labelJson.includes('vw-nav-label') && labelJson.includes('vw-nav-text'))
   }
 
@@ -422,8 +444,29 @@ async function main() {
   // input tooltip.
   {
     const headerText = JSON.stringify(renderer.toJSON())
-    check('the panel title stays short', headerText.includes('Bitwarden 凭据库') && !headerText.includes('Bitwarden / Vaultwarden 凭据库'))
-    check('the title notes Vaultwarden alongside Bitwarden', headerText.includes('支持 Bitwarden / Vaultwarden'))
+    // The heading is three parts now: a 凭据库 badge, the package name, then
+    // the build identity. The badge shares the panel's Badge system, so it is
+    // the same 19px pill the list uses for a TOTP mark.
+    check(
+      'the heading opens with a 凭据库 badge',
+      headerText.includes('"data-vw-badge"' ) && headerText.includes('凭据库'),
+      headerText.slice(0, 260),
+    )
+    check('the heading names the package itself', headerText.includes('dsh-vaultwarden'), headerText.slice(0, 260))
+    // The old note ("supports Bitwarden / Vaultwarden") only repeated what the
+    // heading already says, so it is gone; the small-type slot instead carries
+    // the installed version and a link to the source.
+    check('the redundant compatibility note is gone', !headerText.includes('支持 Bitwarden / Vaultwarden'))
+    check(
+      'the title row carries the installed version',
+      headerText.includes('"data-vw-version"') && headerText.includes('0.8.7'),
+      headerText.slice(0, 300),
+    )
+    check(
+      'the title row carries a clickable link to the source',
+      headerText.includes('"data-vw-repo"') && headerText.includes('https://github.com/BuvkB/dsh-vaultwarden'),
+      headerText.slice(0, 300),
+    )
     const search = renderer.root.findAllByType('input').find((node) => node.props.type === 'search')
     check('the search placeholder is short', search?.props.placeholder === '搜索名称、用户名或网址', String(search?.props.placeholder))
     check('the keyboard shortcuts moved into the tooltip', String(search?.props.title).includes('Esc'))

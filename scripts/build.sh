@@ -65,6 +65,15 @@ relink_peers() {
   for pkg in $PEERS; do link_pkg "$pkg" >/dev/null; done
 }
 
+# ── stamp the build identity into the browser bundle ────────────────────────
+# The heading shows the version and the repo. A browser bundle cannot read
+# package.json, and asking the host for it means changing the node half — which
+# only takes effect after a restart. Stamping the values in here closes that
+# gap and keeps the fallback from ever being hand-maintained: both literals are
+# rewritten from package.json on every build, idempotently.
+echo "=== stamp build identity ==="
+node scripts/stamp-build.mjs
+
 # ── syntax check ─────────────────────────────────────────────────────────────
 echo "=== syntax check ==="
 for file in lib/*.js test/*.mjs; do
