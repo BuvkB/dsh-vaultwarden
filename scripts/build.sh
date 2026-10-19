@@ -132,6 +132,13 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== write-back regression test (trash / concurrency / field preservation) ==="
   node test/write-back.test.mjs
 
+  # The on-disk privacy contract every record obeys: exclusive-create temp path
+  # (a wider file already sitting there is never reused), 0600 carried by the
+  # fresh inode instead of a chmod afterwards, no predictable temp name, and a
+  # clean failure that leaves neither debris nor a half-written record.
+  echo "=== atomic file privacy test ==="
+  node test/atomic-file.test.mjs
+
   # Host-entry smoke test: imports lib/index.js and runs apply() against a fake
   # host context, so a broken Config schema or registration path fails here
   # instead of at startup.

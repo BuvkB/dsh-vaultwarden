@@ -2553,6 +2553,56 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── the re-prompt window closing takes the plaintext with it ──────────────
+  // The expiry path used to clear the reveal flag, the narrow payloads and the
+  // editor — and leave `detail` holding the host's full plaintext. The pane
+  // went on rendering it, and its own 显示 toggle (which never consulted the
+  // grant) put a password straight back on screen after the proof had lapsed.
+  // A grant is a window; when it closes the pane has to be behind the gate
+  // again, not merely re-masked.
+  {
+    const gatedView = { id: 'item-3', name: '需要重新验证的条目', type: 'login', uris: [], repromptRequired: true }
+    const grantedView = {
+      id: 'item-3', name: '需要重新验证的条目', type: 'login', username: 'ops@example.com',
+      password: 'EXPIRY-PLAINTEXT', notes: 'EXPIRY-NOTES', hasTotp: false,
+      fields: [{ name: 'PIN', value: 'EXPIRY-PIN', type: 1 }], uris: [], collections: [], folder: null,
+    }
+    let grantState = { granted: false, remainingMs: 0 }
+    const expiryRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'ask' }, true, AUTHED_SESSION),
+      // The entry is gated until the reader proves the master password.
+      reveal: () => ({ ok: true, value: grantState.granted ? grantedView : gatedView }),
+      authorizeReprompt: () => {
+        grantState = { granted: true, remainingMs: 300000 }
+        return { ok: true, value: { authorized: true, remainingMs: 300000, grantMinutes: 5, view: grantedView } }
+      },
+      repromptGrant: () => ({ ok: true, value: grantState }),
+    })
+    const panel = await mountPanel(mod, {}, expiryRpc)
+    const xText = () => JSON.stringify(panel.renderer.toJSON())
+    const xRows = () => panel.renderer.root.findAllByType('button').filter((node) => node.props.role === 'option')
+    const xInput = (type) => panel.renderer.root.findAllByType('input').find((node) => node.props.type === type)
+    await act(async () => { xRows()[0].props.onClick() })
+    await flush(80)
+    check('the gated entry starts behind the gate', xText().includes('EXPIRY-PLAINTEXT') === false)
+    // Prove the master password; the host answers with the unlocked view.
+    await act(async () => { xInput('password').props.onInput({ target: { value: 'master-password' } }) })
+    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '输入主密码解锁').props.onClick() })
+    await flush(120)
+    check('the proof opens the pane', xText().includes('EXPIRY-PLAINTEXT'), xText().slice(0, 240))
+    // The window lapses while the entry is on screen. One poll tick later the
+    // host reports no grant and the pane must stop holding the plaintext.
+    grantState = { granted: false, remainingMs: 0 }
+    await flush(5200)
+    check('EXPIRY: the password leaves the pane when the window closes', !xText().includes('EXPIRY-PLAINTEXT'), xText().slice(0, 260))
+    check('EXPIRY: the note body leaves too', !xText().includes('EXPIRY-NOTES'))
+    check('EXPIRY: the hidden field value leaves too', !xText().includes('EXPIRY-PIN'))
+    check('EXPIRY: the pane is behind the gate again', xText().includes('需要重新验证') || xText().includes('需要主密码') || xText().includes('重新验证'))
+    const revealCalls = expiryRpc.calls.filter((call) => call.method === 'reveal').length
+    check('EXPIRY: the host is asked again for the gated answer', revealCalls >= 2, String(revealCalls))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   // ── a re-prompt entry has no code to show, anywhere ───────────────────────
   // The 验证码 list was the one read surface that skipped the master-password
   // gate: it asked vw/totp for every row, and a gated entry answered with a

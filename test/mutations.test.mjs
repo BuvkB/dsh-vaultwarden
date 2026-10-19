@@ -116,6 +116,19 @@ async function main() {
   check('update keeps the other fields', afterUpdate.username === 'octocat@jindom.cc' && afterUpdate.notes === 'SSH 部署密钥在 CI 里')
   check('update keeps custom fields (whole-cipher replace)', afterUpdate.fields?.[1]?.value === 'tok_live_abc123', JSON.stringify(afterUpdate.fields))
 
+  // The model-facing read is the narrower one: `all` withholds a hidden
+  // (type 1) field's value, while the panel's own reveal keeps it so it can
+  // render it masked behind a click. Both halves are pinned here, because a
+  // fix that narrowed the panel too would silently empty the owner's screen.
+  const modelView = JSON.parse(await client.get('cipher-github', 'all', undefined, { maskHiddenFields: true }))
+  check('the tool projection hides a hidden custom field value', modelView.fields?.[1]?.value === '<hidden>', JSON.stringify(modelView.fields))
+  check('the tool projection still names the hidden field', modelView.fields?.[1]?.name === 'API Token')
+  check('the tool projection keeps an ordinary custom field', modelView.fields?.[0]?.value === 'jindom', JSON.stringify(modelView.fields?.[0]))
+  const panelView = JSON.parse(await client.get('cipher-github'))
+  check('the panel reveal keeps the hidden value for its own masked row', panelView.fields?.[1]?.value === 'tok_live_abc123', JSON.stringify(panelView.fields))
+  const namedFields = JSON.parse(await client.get('cipher-github', 'fields', undefined, { maskHiddenFields: true }))
+  check('naming field=fields is the explicit ask, and the value comes back', namedFields.fields?.[1]?.value === 'tok_live_abc123', JSON.stringify(namedFields.fields))
+
   // 4. non-login and organization updates are supported (P0-5 / P1-8) ------------
   const noteUpdated = await mutations.update('cipher-db', { name: '生产数据库口令（已改名）' }, undefined)
   check('non-login item update is accepted', noteUpdated.updated === true, JSON.stringify(noteUpdated))

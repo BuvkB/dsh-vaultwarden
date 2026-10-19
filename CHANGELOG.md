@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] — 2026-10-19
+
+### 安全
+
+- 修复「重新验证」授权过期后条目明文仍留在面板上的问题：窗口一失效，详情页立即收回为门禁态，并重新向宿主取一次答案。
+- 修复「重新验证」授权过期后不再轮询倒计时的问题：解锁后的答案不含 `repromptRequired`，轮询因此提前停止，授权窗口永远到不了点。
+- `bitwarden_get` 的 `field=all` 不再返回「隐藏」型自定义字段的值（占位 `<hidden>`），需要时用 `field=fields` 显式取；面板自身的读取不受影响。
+- 检索结果不再回传排序分 `score`。
+- 网络错误消息只报服务器 origin，不再回带完整接口路径。
+
+### 修复
+
+- 落盘写入改为独占创建 + 随机临时名 + fsync + 目录 fsync：临时文件被预置为 0644 时权限不再被沿用，崩溃不再可能留下 0 字节记录。
+- 修正面板自定义字段注释与宿主投影不符的问题。
 ## [0.8.8] — 2026-10-18
 
 ### 新增
