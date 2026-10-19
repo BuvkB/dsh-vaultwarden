@@ -142,7 +142,6 @@ bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
 - 工具返回的明文凭据会进入会话上下文（这是"让模型能用密码"的前提）。提示词要求模型不要回显、不要写入文件。
 - 写回默认关闭（`accessMode: readonly`）；`ask` 档**模型工具**每次写入都走 DSH 审批确认，`auto` 直接写入（面板的人工操作不受这一档限制）。个人条目与组织条目都支持；彻底删除只有 `bitwarden_delete` 工具能发起，必须显式带 `confirm: true`，面板与 RPC 只能移入回收站。
 - 落盘缓存带 HMAC-SHA256 签名（密钥 `~/.dsh/data/dsh-vaultwarden/cache.key`，`0600`）：签名不符、账号不匹配或没有密钥的缓存一律丢弃重下，防止把别处的缓存文件当成自己的读进来。
-- 与本地 `dsh-vault` 插件**无标识冲突**（条目 id / 工具名 / 设置命名空间 / 设置页 id 均不同）：本插件是 `dsh-vaultwarden` ↔ `bitwarden_*` ↔ `bitwarden` ↔ `vaultwarden`，dsh-vault 是 `vault` ↔ `vault_*` ↔ `settings.vault` ↔ `vault`。
 
 ## 排错
 
