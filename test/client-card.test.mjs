@@ -1772,6 +1772,33 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── a read that never lands must not hold the rail hostage ────────────────
+  // The reported bug: a first load showed the entries already listed under a
+  // sidebar stuck on its ghost block, the status still reading "未同步". The
+  // two background reads used to sit in one `Promise.all`, which made the
+  // slower one the gate for the faster one: `folders` feeds only the
+  // move-to-folder step, but a folders call that never settled held the
+  // already-arrived `overview` hostage, so `setOverview` never ran and the rail
+  // never left `!overview`. The overview had succeeded; no retry or timeout on
+  // the overview could have helped. Each read now settles on its own.
+  {
+    const hangRpc = makeRpc({ folders: () => new Promise(() => {}) })
+    const panel = await mountPanel(mod, {}, hangRpc)
+    await flush(300)
+    const rail = panel.renderer.root.findAll((node) => node.props?.['data-vw-nav'] === '')[0]
+    const railRows = () => rail.findAll((node) => node.props?.['data-vw-section'] !== undefined)
+    const railGhosts = () => rail.findAll((node) => node.props?.['data-vw-skeleton'] !== undefined)
+    const rows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    check(
+      'a folders read that never answers does not freeze the rail on its placeholder',
+      Boolean(rail) && railGhosts().length === 0 && railRows().length === 9,
+      'ghosts=' + railGhosts().length + ' rows=' + railRows().length,
+    )
+    check('the rail stops claiming to be busy once the overview landed', rail?.props?.['aria-busy'] === undefined, JSON.stringify(rail?.props?.['aria-busy']))
+    check('the entries the reader came for are on screen', rows().length > 0, 'rows=' + rows().length)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   // ── the 验证码 place: rows you read, not rows you open ────────────────────
   // A code and its copy control live on the row itself, so this one place
   // trades the row <button> for a div carrying the same role and the same row

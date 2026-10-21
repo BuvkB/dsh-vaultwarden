@@ -4,6 +4,15 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] — 2026-10-21
+
+### 修复
+
+- 修复首次加载后侧栏一直停在占位块、下方留一大片空白的问题。根因是「读取资料夹」与「读取侧栏统计」被放在同一个 `Promise.all` 里：后者决定侧栏画什么，前者只用于「移动到文件夹」，但前者一旦挂住，就会把已经返回的统计一起扣住，侧栏因此永远停在"加载中"，而列表早已渲染出全部条目。
+- 两次读取改为各自结算：各带自己的超时，谁先到谁先渲染，互不等待。资料夹读取超时 5 秒，侧栏统计 6 秒（且整条重试链共用一个上限，不是每次尝试各算一遍）。
+- 统计读取失败时侧栏落到三个结构项并退出忙碌态，不再保留永远不会兑现的占位块。
+- 占位骨架条的颜色由背景层色改为宿主边框色：原先在白底面板上几乎不可见，一片空白看起来像空盒子而不是"加载中"。
+
 ## [0.9.2] — 2026-10-21
 
 ### 变更
