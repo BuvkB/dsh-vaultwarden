@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-10-21
+
+### 变更
+
+- 面板标题改为纯文字「凭据库」，去掉标题前的徽章；按钮改用不带动画的文字标签。
+- 标题字号由 17px 提升到 19px。
+- 侧栏与设置导航的分区徽章改为盾牌加锁孔，纯黑白，跟随主题明暗。
+
+### 修复
+
+- 修复标题与后面的版本号、GitHub 链接文字高度不齐的问题。
+- 修复 GitHub 链接内图标与文字未对齐的问题。
+
 ## [0.9.1] — 2026-10-21
 
 ### 修复

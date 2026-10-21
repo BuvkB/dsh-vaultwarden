@@ -418,21 +418,37 @@ async function main() {
     })
     const labelJson = JSON.stringify(labelRenderer.toJSON())
     check('panel label comes from the dictionary', labelJson.includes('凭据库'), labelJson.slice(0, 120))
-    // The label's glyph must be present and must be DRAWN in the host's icon
-    // language — a 16-unit grid at a 1px stroke, with a tinted body. Asserting
-    // the exact path string coupled this check to one drawing, so a redesign
-    // of the shield (which is what the host-language pass was) failed it for
-    // no reason. These assertions describe the contract instead.
+    // The label carries the plugin's badge — the same mark the panel heading
+    // leads with. Asserting the contract, not a path string: a redesign must
+    // not fail this for the wrong reason.
+    //
+    // Three shapes carry two ideas: the shield outline (vault) and the keyhole
+    // (Bitwarden), both centred on the same axis. Monochrome throughout — every
+    // shape either inherits `currentColor` or is a plain outline, so the mark
+    // flips with the theme and introduces no colour of its own, and the two marks
+    // share one centre so the badge reads as composed rather than scattered.
+    const glyphSvg = JSON.parse(labelJson).children[0]
+    const shapes = glyphSvg.children ?? []
+    const paints = shapes.map((s) => String((s.props && (s.props.fill || s.props.stroke)) ?? ''))
     check('the settings label carries the vault glyph', labelJson.includes('vw-nav-glyph'), labelJson.slice(0, 120))
     check(
-      'the label glyph is drawn in the host icon language (16 grid, 1px stroke)',
-      labelJson.includes('"viewBox":"0 0 16 16"') && labelJson.includes('"strokeWidth":1'),
+      'the label glyph draws the shield and the keyhole',
+      shapes.length >= 3,
       labelJson.slice(0, 200),
     )
+    // Both marks on one vertical axis: the keyhole's two shapes are centred on
+    // x=8 and so is the shield's outline, which is what gives the badge a centre
+    // of gravity. Drawing them on different axes is the mistake this guards.
+    const centred = shapes.filter((s) => s.props && s.props.cx === 8)
     check(
-      'the label glyph carries a tinted body like the host icons do',
-      labelJson.includes('"fillOpacity":0.16'),
-      labelJson.slice(0, 200),
+      'the keyhole is centred on the shield axis',
+      centred.length >= 1,
+      JSON.stringify(shapes.map((s) => s.props && s.props.cx)),
+    )
+    check(
+      'the label glyph is monochrome: every shape inherits the ink',
+      paints.every((p) => p === 'currentColor' || p === 'none'),
+      JSON.stringify(paints),
     )
     check('the settings label is marked for the gear replacement', labelJson.includes('vw-nav-label') && labelJson.includes('vw-nav-text'))
   }
