@@ -629,7 +629,7 @@ async function main() {
   // can only be on screen because the gate reads that flag and asks vw/totp.
   check('the TOTP gate opens from the host flag alone', rpc.calls.some((call) => call.method === 'totp' && call.args.id === 'item-1'), JSON.stringify(rpc.calls.filter((call) => call.method === 'totp')))
   check('the reveal fixture carries the boolean, never a secret', REVEALS['item-1'].hasTotp === true && !('totpSecret' in REVEALS['item-1']))
-  check('detail offers copy buttons', text().includes('复制'))
+  check('detail offers copy controls, labelled by their tooltip', buttons().filter((node) => node.props.title === '复制').length >= 1)
 
   // ── the countdown is a ring that shrinks, and cools as it does ───────────
   // Reported: the bar only moved once a second, and nothing said how urgent
@@ -706,7 +706,7 @@ async function main() {
     check('the ramp lands on the error token, not a third flat amber', source.includes('rampTone(TOKEN.warn, TOKEN.err') && !source.includes('--vw-amber'))
   }
 
-  const revealToggle = () => buttons().filter((node) => node.props.children === '显示')
+  const revealToggle = () => buttons().filter((node) => node.props.title === '显示')
   await act(async () => {
     revealToggle()[0].props.onClick()
   })
@@ -1777,7 +1777,7 @@ async function main() {
     check('the code row cannot outgrow the list it sits in', tRows()[0].props.style.boxSizing === 'border-box', String(tRows()[0].props.style.boxSizing))
     check('the code is grouped three and three', String(tCode()?.props?.children) === '123 456', String(tCode()?.props?.children))
     check('the row carries its own countdown ring', Boolean(tRing()))
-    check('the row offers a copy control', String(tCopy()?.props?.children) === '复制' && tCopy().props.title === '复制动态码', String(tCopy()?.props?.children))
+    check('the row offers a copy control', tCopy()?.props?.title === '复制动态码', String(tCopy()?.props?.title))
     await act(async () => { panel.renderer.unmount() })
   }
 
@@ -1957,20 +1957,42 @@ async function main() {
     }
   }
 
-  // ── a host that cannot count: the sidebar degrades to one place ───────────
+  // ── a host that cannot count: the sidebar keeps its three fixed places ────
   // vw/overview is newer than the rest of the host half. A page served by an
-  // older host must still open the vault, so the menu falls back to the one
-  // place that needs no counts at all rather than to a menu of guesses.
+  // older host must still open the vault, so the menu falls back to the places
+  // that need no counts rather than to a menu of guesses.
+  //
+  // "No counts" means 全部条目 / 收藏 / 验证码 — not 全部条目 alone. Those three
+  // exist in every vault whatever the numbers say, and drawing only the first
+  // one made the sidebar render one row and then grow to ten a moment later
+  // (measured 48px → 418px): that reflow is the flicker the panel was reported
+  // for, and no transition can hide a box that changes its mind. What waits for
+  // the overview is the data underneath — the type and folder groups — because
+  // a group that does not exist must not hold an empty slot.
   {
     const panel = await mountPanel(mod, {}, makeRpc({ overview: () => ({ ok: false, error: { code: 'not_found', message: 'vw.overview unknown' } }) }))
     const navRows = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section'] !== undefined)
     const rows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
     check('an uncounted host still opens the vault', rows().length === ITEM_COUNT, 'rows=' + rows().length)
+    const keys = navRows().map((node) => node.props['data-vw-section'])
     check(
-      'the sidebar degrades to the one place that needs no counts',
-      navRows().length === 1 && navRows()[0].props['data-vw-section'] === 'all',
-      JSON.stringify(navRows().map((node) => node.props['data-vw-section'])),
+      'the sidebar keeps the three places that need no counts',
+      keys.join(',') === 'all,favorites,totp',
+      JSON.stringify(keys),
     )
+    // The count pill renders nothing at all when the number is unknown. A 0
+    // there would be a statement the panel cannot make yet.
+    const pillOf = (node) => {
+      const kids = Array.isArray(node.props.children) ? node.props.children : [node.props.children]
+      return kids.map((child) => (child && child.props ? child.props.children : null)).filter((value) => value !== null && value !== undefined)
+    }
+    check(
+      'the countless places carry no invented zero',
+      navRows().slice(1).every((node) => pillOf(node).every((value) => String(value) !== '0')),
+      navRows().slice(1).map((node) => pillOf(node).map(String).join('|')).join(' ; '),
+    )
+    // And the data-driven places are genuinely absent, not blank rows.
+    check('no type or folder group is drawn without an overview', !JSON.stringify(panel.renderer.toJSON()).includes('文件夹 ('), '')
     await act(async () => { panel.renderer.unmount() })
   }
 
@@ -2369,12 +2391,12 @@ async function main() {
     check('a card entry is labelled with its type', pText().includes('银行卡'))
     check('opening a card entry does not hand over the card body', pText().includes('含银行卡') && !pText().includes('4111111111111111') && !pText().includes('张伟'))
     check('the passkey badge shows up', pText().includes('含通行密钥'))
-    await act(async () => { pButtons().find((node) => node.props.children === '读取这一项').props.onClick() })
+    await act(async () => { pButtons().find((node) => node.props.title === '读取这一项').props.onClick() })
     await act(async () => { await sleep(50) })
     check('the card body arrives only when that field is asked for', cardRpc.calls.some((call) => call.method === 'reveal' && call.args.field === 'card'))
     check('the card number is masked to its last four', pText().includes('•••• •••• •••• 1111') && !pText().includes('4111111111111111'))
     check('the cardholder name shows in the clear', pText().includes('张伟'))
-    await act(async () => { pButtons().find((node) => node.props.children === '显示').props.onClick() })
+    await act(async () => { pButtons().find((node) => node.props.title === '显示').props.onClick() })
     check('the card number reveals on demand', pText().includes('4111111111111111'))
 
     check('attachments fold behind a header', nodeWith('data-vw-fold', 'attachments').length === 1 && pText().includes('附件（1）'))
@@ -2403,11 +2425,11 @@ async function main() {
 
     check('an ssh key is labelled with its type', pText().includes('SSH 密钥'))
     check('opening an ssh entry shows the fingerprint but not the key material', pText().includes('SHA256:abc123') && !pText().includes('BEGIN OPENSSH') && !pText().includes('ssh-ed25519'))
-    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '读取这一项').props.onClick() })
+    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.title === '读取这一项').props.onClick() })
     await act(async () => { await sleep(50) })
     check('the public key is shown in the clear once the field is read', pText().includes('ssh-ed25519'))
     check('the private key stays masked', pText().includes('●●●●●●●●') && !pText().includes('BEGIN OPENSSH'))
-    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.children === '显示').props.onClick() })
+    await act(async () => { panel.renderer.root.findAllByType('button').find((node) => node.props.title === '显示').props.onClick() })
     check('the private key reveals on demand', pText().includes('BEGIN OPENSSH'))
     await act(async () => { panel.renderer.unmount() })
   }
@@ -2533,7 +2555,7 @@ async function main() {
     check('opening an entry does not print its note body', !dText().includes('NOTE-BODY-SECRET'), dText().slice(0, 240))
     check('opening an entry does not print its custom field values', !dText().includes('4321') && !dText().includes('jindom'))
     check('the custom field name is still readable in the pane', dText().includes('PIN') && dText().includes('租户'))
-    check('the masked rows carry a reveal control', dButtons().filter((node) => node.props.children === '显示').length >= 3, String(dButtons().filter((node) => node.props.children === '显示').length))
+    check('the masked rows carry a reveal control', dButtons().filter((node) => node.props.title === '显示').length >= 3, String(dButtons().filter((node) => node.props.title === '显示').length))
     // One click on the note's own toggle reveals that row and nothing else.
     // Walk the element tree by hand: a field row's children include component
     // instances, and JSON.stringify on a fiber throws on its circular parent.
@@ -2546,7 +2568,7 @@ async function main() {
     const fieldRowLabelled = (label) => panel.renderer.root
       .findAll((node) => node.props?.['data-vw-field'] !== undefined)
       .find((node) => textOf(node).startsWith(label))
-    const noteToggle = () => fieldRowLabelled('备注').findAllByType('button').find((node) => node.props.children === '显示')
+    const noteToggle = () => fieldRowLabelled('备注').findAllByType('button').find((node) => node.props.title === '显示')
     await act(async () => { noteToggle().props.onClick() })
     check('the note body reveals on demand', dText().includes('NOTE-BODY-SECRET'))
     check('revealing the note does not reveal the custom fields', !dText().includes('4321'))
