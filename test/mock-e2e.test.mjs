@@ -150,7 +150,10 @@ async function main() {
       sleep: async (ms) => { sleeps.push(ms); clock += ms },
     })
     const fresh = JSON.parse(await freshClient.get('cipher-github', 'totp', undefined, { waitFresh: true }))
-    check('waitFresh waits out a window that is nearly gone', sleeps.length === 1 && sleeps[0] === 2_000, JSON.stringify(sleeps))
+    // Exactly the remaining second, not two: the wait lands ON the next window
+    // boundary instead of overshooting it, so a caller blocked on a code is not
+    // held a full extra second for nothing.
+    check('waitFresh waits out a window that is nearly gone', sleeps.length === 1 && sleeps[0] === 1_000, JSON.stringify(sleeps))
     check('waitFresh returns a code with a full window left', fresh.totp?.freshFor >= 20, JSON.stringify(fresh.totp))
     check('waitFresh returns a DIFFERENT code after the boundary', fresh.totp?.code !== '94287082', JSON.stringify(fresh.totp))
 

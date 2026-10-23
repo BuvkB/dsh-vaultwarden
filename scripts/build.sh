@@ -190,6 +190,28 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   # suite would report the native row as verified without rendering it once.
   echo "=== native tool row test (host DisclosureRow) ==="
   DSH_REQUIRE_NATIVE_ROW=1 node test/native-row.test.mjs
+
+  # The stress suites: cache-chain (warm start, damaged record, account
+  # mismatch), concurrency (sign-out racing an unlock, two accounts sharing a
+  # data dir), malformed payloads (wrong shapes from the server), scale (a vault
+  # several times the size of a real one) and time (clock rollback and jump).
+  # They are slower than the rest and they exist for the failures the hand-
+  # written cases never reach, so they run as part of the build rather than as
+  # something somebody remembers to run.
+  echo "=== stress: cache chain ==="
+  node test/stress-cache-chain.test.mjs
+
+  echo "=== stress: concurrency and races ==="
+  node test/stress-concurrency.test.mjs
+
+  echo "=== stress: malformed payloads ==="
+  node test/stress-malformed.test.mjs
+
+  echo "=== stress: scale ==="
+  node test/stress-scale.test.mjs
+
+  echo "=== stress: clock rollback and jump ==="
+  node test/stress-time.test.mjs
 fi
 
 echo "=== build complete: $ROOT ==="

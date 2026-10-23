@@ -35,11 +35,45 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 // The browser provides window; react-test-renderer does not. The panel's
 // "/" shortcut listens on it, so scaffold the minimal surface here.
+// The listeners are kept, not discarded: the shortcuts are panel-wide and the
+// only way to press a key on them from here is to call the handler the panel
+// registered.
+const windowListeners = new Map()
 if (typeof globalThis.window === 'undefined' || typeof globalThis.window.addEventListener !== 'function') {
   globalThis.window = {
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (type, handler) => {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set())
+      windowListeners.get(type).add(handler)
+    },
+    removeEventListener: (type, handler) => { windowListeners.get(type)?.delete(handler) },
   }
+} else {
+  const originalAdd = globalThis.window.addEventListener.bind(globalThis.window)
+  const originalRemove = globalThis.window.removeEventListener.bind(globalThis.window)
+  globalThis.window.addEventListener = (type, handler) => {
+    if (!windowListeners.has(type)) windowListeners.set(type, new Set())
+    windowListeners.get(type).add(handler)
+    originalAdd(type, handler)
+  }
+  globalThis.window.removeEventListener = (type, handler) => {
+    windowListeners.get(type)?.delete(handler)
+    originalRemove(type, handler)
+  }
+}
+/** Press a key on every handler the panel registered for it. */
+const press = (key, options = {}) => {
+  let prevented = false
+  const event = {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    target: null,
+    ...options,
+    preventDefault: () => { prevented = true },
+  }
+  for (const handler of [...(windowListeners.get('keydown') ?? [])]) handler(event)
+  return prevented
 }
 
 // The panel writes its own stylesheet, because a container query cannot live
@@ -307,10 +341,16 @@ function makeRpc(overrides = {}) {
 function loadModule() {
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   let entry
+  // The bundle is invoked with its own window object, so the shortcut handlers
+  // land on this stub rather than on globalThis.window: both feed the same
+  // registry, which is what lets `press` reach them.
   const windowStub = {
     __ModuleLoader__: { load: (value) => (entry = value) },
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (type, handler) => {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set())
+      windowListeners.get(type).add(handler)
+    },
+    removeEventListener: (type, handler) => { windowListeners.get(type)?.delete(handler) },
   }
   new Function('window', source)(windowStub)
   const mod = entry.factory((id) => {
@@ -492,7 +532,9 @@ async function main() {
 
   const text = () => JSON.stringify(renderer.toJSON())
   const buttons = () => renderer.root.findAllByType('button')
-  const rows = () => buttons().filter((node) => node.props.role === 'option')
+  // Rows are divs, not buttons: a row holds the hover island, and a button
+  // cannot nest a button.
+  const rows = () => renderer.root.findAll((node) => node.props?.role === 'option')
 
   check('panel loads the vault list over vw/list', text().includes('GitHub 工作账号') && text().includes('生产数据库口令'))
 
@@ -530,6 +572,105 @@ async function main() {
   check('panel shows the vault size', text().includes(`共 ${ITEM_COUNT} 条`))
   check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
+
+  // ── a row is a div now, and it carries its own quick actions ─────────────
+  // The row used to be a <button>, which is why copying an account meant
+  // opening the card first: a button cannot hold the copy buttons. It is a
+  // focusable div now, and hover reveals the island. Three things have to hold
+  // or the trade was not worth making — the row must stay operable from the
+  // keyboard, a key pressed inside the island must not also open the row, and
+  // the island must never appear on a code row (those stay exactly as they —
+  // were: same tail, same single control, no second copy affordance).
+  {
+    const islandOf = (row) => row.findAll((node) => node.props?.['data-vw-row-actions'] === '')[0]
+    const isDiv = rows().every((row) => row.type === 'div')
+    check('a row is a div, so the island can live inside it', isDiv, JSON.stringify(rows().map((row) => row.type)))
+    check('a row is still reachable by keyboard', rows().every((row) => row.props.tabIndex === 0))
+    check('Enter on a row opens it', (() => {
+      let stopped = false
+      rows()[1].props.onKeyDown({ key: 'Enter', target: rows()[1], currentTarget: rows()[1], preventDefault: () => { stopped = true } })
+      return stopped
+    })())
+    check('a key pressed inside the island does not open the row', (() => {
+      const row = rows()[0]
+      let stopped = false
+      row.props.onKeyDown({ key: 'Enter', target: {}, currentTarget: row, preventDefault: () => { stopped = true } })
+      return stopped === false
+    })())
+    const island = islandOf(rows()[0])
+    const islandLabels = island ? island.findAllByType('button').map((node) => node.props['aria-label']) : []
+    check('the row offers copy-account and copy-password without opening', islandLabels.join('|') === '复制用户名|复制密码', JSON.stringify(islandLabels))
+    // An entry with no username has nothing to copy but its password, and a
+    // disabled first control would be a keyboard trap on every such row.
+    const bare = islandOf(rows()[1])
+    check('an entry with no username offers only the password', bare ? bare.findAllByType('button').length === 1 : false)
+    const notTotp = rows().every((row) => islandOf(row)?.findAllByType('button').length >= 1)
+    check('every ordinary row carries the island', notTotp)
+  }
+
+  // The password is not in the list projection — the row asks for it on click.
+  // Two consequences worth pinning: the read is scoped to one field (a row must
+  // not pull a whole card to copy one value), and a refused read (reprompt gate)
+  // copies nothing at all rather than putting an empty string on the clipboard.
+  {
+    const writes = []
+    const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { clipboard: { writeText: async (text) => { writes.push(text) } } },
+      configurable: true,
+    })
+    const islandOf = (row) => row.findAll((node) => node.props?.['data-vw-row-actions'] === '')[0]
+    const passButtonOf = (row) => islandOf(row).findAllByType('button').find((node) => node.props['aria-label'] === '复制密码')
+    try {
+      const before = rpc.calls.filter((call) => call.method === 'reveal' && call.args.field === 'password').length
+      await act(async () => {
+        await passButtonOf(rows()[0]).props.onClick({ stopPropagation: () => {} })
+      })
+      await flush(50)
+      const reads = rpc.calls.filter((call) => call.method === 'reveal' && call.args.field === 'password')
+      check('the row copies a password over a field-scoped read', reads.length === before + 1 && reads.at(-1).args.id === 'item-1', JSON.stringify(reads.at(-1)?.args))
+      check('the row never reads the whole card to copy one value', !reads.some((call) => call.args.field === undefined))
+      check('the password reached the clipboard, not the screen', writes.includes('gh-p@ssw0rd-42') && !text().includes('gh-p@ssw0rd-42'), JSON.stringify(writes))
+      // item-3 is behind the reprompt gate: its read comes back refused.
+      const writesBefore = writes.length
+      await act(async () => {
+        await passButtonOf(rows()[2]).props.onClick({ stopPropagation: () => {} })
+      })
+      await flush(50)
+      check('a refused read copies nothing', writes.length === writesBefore, JSON.stringify(writes))
+      check('a refused read raises no confirmation', passButtonOf(rows()[2]).props['aria-label'] === '复制密码')
+    } finally {
+      if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator)
+      else delete globalThis.navigator
+    }
+  }
+
+  // ── the panel's shortcuts ────────────────────────────────────────────────
+  // Escape used to do nothing outside the search box, which made the back
+  // button the only way out of a card — and in the drill layout that button is
+  // the whole way back. The rules that matter: a key typed into a field is the
+  // field's, and a key the panel does claim has to actually do the thing.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    const pText = () => JSON.stringify(panel.renderer.toJSON())
+    const pRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
+    await act(async () => { pRows()[0].props.onClick() })
+    await flush(60)
+    const cardOpen = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-detail'] === '').length > 0
+    check('a card is open before the shortcut is used', cardOpen())
+    check('Escape is claimed by the panel while a card is open', press('Escape') === true)
+    await flush(40)
+    check('Escape steps out of the card', !cardOpen(), pText().slice(0, 200))
+    check('Escape is a no-op when nothing is open', press('Escape') === false)
+    // The search box owns Escape (it clears the query): the panel-wide handler
+    // must not also fire while the reader is typing.
+    check('a key typed in a field belongs to the field', press('Escape', { target: { tagName: 'INPUT' } }) === false)
+    check('slash looks for the search box', press('/') === true)
+    check('slash does nothing while typing in a field', press('/', { target: { tagName: 'INPUT' } }) === false)
+    check('Cmd/Ctrl-K is search too', press('k', { metaKey: true }) === true && press('k', { ctrlKey: true }) === true)
+    check('a bare k is not a shortcut', press('k') === false)
+    await act(async () => { panel.renderer.unmount() })
+  }
 
   // ── an archived entry stays visible in the list, and says so ─────────────
   // The host's list read asks for archived rows on purpose (a retired entry
@@ -1555,7 +1696,7 @@ async function main() {
     const race = await mountPanel(mod, {}, raceRpc)
     const raceText = () => JSON.stringify(race.renderer.toJSON())
     const raceButtons = () => race.renderer.root.findAllByType('button')
-    const raceRows = () => raceButtons().filter((node) => node.props.role === 'option')
+    const raceRows = () => race.renderer.root.findAll((node) => node.props?.role === 'option')
     const raceInputs = () => race.renderer.root.findAllByType('input')
     const raceSearch = () => raceInputs().find((node) => node.props.type === 'search')
     await act(async () => {
@@ -1706,15 +1847,40 @@ async function main() {
     )
     check('the place on screen is marked current', navRow('all').props['aria-current'] === 'true' && navRow('totp').props['aria-current'] === undefined)
     check('the sidebar rows are not entry rows', navKeys().every((key) => navRow(key).props.role === undefined))
-    // The rail draws its marks now: one 16x16 SVG per row instead of a text
-    // glyph whose optical size depended on the host's font. The count stays the
-    // bare number — the chip is the style around it, never part of its text.
+    // The rail draws its marks now: one SVG per row instead of a text glyph
+    // whose optical size depended on the host's font. The rail alone uses the
+    // reference's 24-unit grid at 2-unit stroke; everything else in the panel
+    // keeps the panel's own 16-unit family, so the two asserts below pin both
+    // facts rather than just "some svg is there". The count stays the bare
+    // number — the chip is the style around it, never part of its text.
     const navIcons = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section-icon'] !== undefined)
     check('every place draws its own icon', navIcons().length === navKeys().length && navIcons().every((node) => String(node.props['data-vw-section-icon']).length > 0), JSON.stringify(navIcons().map((node) => node.props['data-vw-section-icon'])))
     check(
       'the icons are drawn, not typed: one svg per row',
-      navIcons().every((node) => node.children?.[0]?.type === 'svg' && node.children[0].props.viewBox === '0 0 16 16'),
+      navIcons().every((node) => node.children?.[0]?.type === 'svg'),
       JSON.stringify(navIcons().map((node) => node.children?.[0]?.type)),
+    )
+    check(
+      'the rail draws on the reference grid, with its stroke and round joins',
+      navIcons().every((node) => {
+        const svg = node.children[0].props
+        return svg.viewBox === '0 0 24 24' && svg.strokeWidth === 2 && svg.strokeLinecap === 'round' && svg.strokeLinejoin === 'round'
+      }),
+      JSON.stringify(
+        navIcons().slice(0, 2).map((node) => {
+          const svg = node.children[0].props
+          return [svg.viewBox, svg.strokeWidth, svg.strokeLinecap, svg.strokeLinejoin]
+        }),
+      ),
+    )
+    // The reference is line art: nothing in the rail may carry a translucent
+    // body the way the old family's tiles did. A solid dot (the key's ward) is
+    // part of the drawing, not a body, so the test pins the tint and not the
+    // fill.
+    check(
+      'no rail mark carries a tinted body: the reference is line art',
+      navIcons().every((node) => node.children[0].children.every((shape) => shape.props.fillOpacity === undefined)),
+      JSON.stringify(navIcons().map((node) => node.children[0].children.length)),
     )
     check('the icons are decoration', navIcons().every((node) => node.children[0].props['aria-hidden'] === 'true'))
     const countChips = () => panel.renderer.root.findAll((node) => node.props && node.props['data-vw-section-count'] !== undefined)
@@ -1799,6 +1965,120 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── the rail counts in one shape, then fills it ───────────────────────────
+  // Reported: on a first load the sidebar showed 全部条目 / 收藏 / 验证码 as
+  // three finished rows above a block of skeleton bars — "单独显示出来有点突兀".
+  // The three were drawn for real because they need no count, and everything
+  // else was ghosted because it does; the seam between the two is what the eye
+  // caught. So the rail is one object while it is counting: every slot is a
+  // ghost, in the real row's own metrics, and the answer replaces it slot for
+  // slot.
+  //
+  // Two things are asserted here, and the second is the one that makes the
+  // swap invisible rather than merely tidy: the ghost rows measure what the
+  // real rows measure (same padding, gap, icon box, label strut, count pill),
+  // so the rail's box is already the height it will end at.
+  {
+    const base = makeRpc()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const rpc = makeRpc({ overview: () => gate.then(() => base.call('/api', 'vw/overview', { args: {} })) })
+    const panel = await mountPanel(mod, {}, rpc)
+    await flush(200)
+    const rail = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-nav'] === '')[0]
+    const ghosts = () => rail().findAll((node) => node.props?.['data-vw-ghost-row'] !== undefined)
+    const ghostHeads = () => rail().findAll((node) => node.props?.['data-vw-ghost-group'] !== undefined)
+    const places = () => rail().findAll((node) => node.props?.['data-vw-section'] !== undefined)
+
+    check(
+      'while counting, the rail draws no finished rows at all',
+      places().length === 0,
+      'places=' + places().length,
+    )
+    check(
+      'the rail is one skeleton: every slot, including the three structural places',
+      ghosts().length === 9 && ghostHeads().length === 2,
+      'rows=' + ghosts().length + ' heads=' + ghostHeads().length,
+    )
+    check('the counting rail says it is busy', rail()?.props?.['aria-busy'] === 'true', JSON.stringify(rail()?.props?.['aria-busy']))
+    const ghostRowStyle = ghosts()[0].props.style
+    const ghostIconBox = ghosts()[0].findAll((node) => node.props?.style?.width === 16)[0]
+    check(
+      'a ghost row borrows the real row\u2019s metrics, not a guessed height',
+      ghostRowStyle.gap === 10 && ghostRowStyle.padding === '8px 10px' && ghostRowStyle.fontSize === 13 && Boolean(ghostIconBox),
+      JSON.stringify({ gap: ghostRowStyle.gap, padding: ghostRowStyle.padding, fontSize: ghostRowStyle.fontSize, icon: Boolean(ghostIconBox) }),
+    )
+
+    // The answer lands. Same slot count, so the rail does not resize; the
+    // ghosts go away in the same frame rather than fading out underneath.
+    await act(async () => { release(); await sleep(80) })
+    await flush(200)
+    check(
+      'the answer replaces the ghosts in one frame, with none left behind',
+      places().length === 9 && ghosts().length === 0 && ghostHeads().length === 0,
+      'places=' + places().length + ' ghosts=' + ghosts().length + ' heads=' + ghostHeads().length,
+    )
+    check('the filled rail stops claiming to be busy', rail()?.props?.['aria-busy'] === undefined, JSON.stringify(rail()?.props?.['aria-busy']))
+    const realRowStyle = places()[0].props.style
+    check(
+      'the ghost slot and the real row it becomes measure the same',
+      realRowStyle.gap === ghostRowStyle.gap && realRowStyle.padding === ghostRowStyle.padding && realRowStyle.fontSize === ghostRowStyle.fontSize,
+      JSON.stringify({ real: { gap: realRowStyle.gap, padding: realRowStyle.padding }, ghost: { gap: ghostRowStyle.gap, padding: ghostRowStyle.padding } }),
+    )
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // The rail's arrival uses the panel's one "content appearing" rhythm: the
+  // rows stagger 18ms apart in DOM order (headings included, so a group
+  // heading arrives one beat before its rows), and the skeleton itself does
+  // not animate its arrival — it was already on screen.
+  {
+    const sheet = mod.__panelSheet?.() ?? panelSheetText
+    check(
+      'the rail fills in on the same 18ms cadence as the entry list',
+      /\[data-vw-nav\] > \*:nth-child\(2\)\s*\{ animation-delay: 18ms \}/.test(sheet),
+      'rail stagger rule missing',
+    )
+    check(
+      'the rail\u2019s own height is not animated (auto \u2192 auto cannot ease)',
+      !/\[data-vw-nav\]\s*\{[^}]*transition:\s*height/.test(sheet),
+      'a height transition is back on the rail',
+    )
+    check(
+      'reduced motion turns the rail\u2019s arrival off rather than shortening it',
+      /prefers-reduced-motion[\s\S]*\[data-vw-nav\] \[data-vw-section\]/.test(sheet),
+      'reduced-motion rule does not cover the rail rows',
+    )
+  }
+
+  // ── the three motions the panel gained, and their exits ──────────────────
+  // Each one is a small piece of feedback that has to survive two conditions:
+  // the island must not exist for a finger, and none of it may run for a reader
+  // who asked for less motion.
+  {
+    const sheet = mod.__panelSheet?.() ?? panelSheetText
+    check(
+      'the island is revealed by hover, and is not a target for a finger',
+      /@media \(hover: hover\)/.test(sheet) && /\[data-row\] \[data-vw-row-actions\] \{ display: none \}/.test(sheet),
+      'the island is not gated on a hover-capable pointer',
+    )
+    check(
+      'the confirmation is a shape change on the glyph',
+      /\[data-vw-copied="true"\] svg \{ animation: vw-tick/.test(sheet),
+      'the tick morph is not hooked up',
+    )
+    check(
+      'the sync dot breathes only when it has a state worth breathing',
+      /\[data-vw-sync-dot="ok"\][\s\S]{0,90}vw-breathe/.test(sheet) && !/\[data-vw-sync-dot="idle"\]/.test(sheet),
+      'the breathing dot is either missing or applied to every tone',
+    )
+    check(
+      'reduced motion drops the new arrivals too',
+      /prefers-reduced-motion[\s\S]*\[data-vw-copied="true"\] svg/.test(sheet) && /prefers-reduced-motion[\s\S]*\[data-vw-sync-dot\]::after/.test(sheet),
+      'the new animations are not in the reduced-motion whitelist',
+    )
+  }
+
   // ── the 验证码 place: rows you read, not rows you open ────────────────────
   // A code and its copy control live on the row itself, so this one place
   // trades the row <button> for a div carrying the same role and the same row
@@ -1821,6 +2101,10 @@ async function main() {
     check('the code is grouped three and three', String(tCode()?.props?.children) === '123 456', String(tCode()?.props?.children))
     check('the row carries its own countdown ring', Boolean(tRing()))
     check('the row offers a copy control', tCopy()?.props?.title === '复制动态码', String(tCopy()?.props?.title))
+    // The code place is deliberately untouched: its row keeps the single tail it
+    // was designed around (ring, grouped code, one copy button) and must not pick
+    // up the account/password island that ordinary rows now wear.
+    check('a code row keeps its own tail and takes no island', tRows()[0].findAll((node) => node.props?.['data-vw-row-actions'] === '').length === 0 && tRows()[0].findAllByType('button').length === 1)
     await act(async () => { panel.renderer.unmount() })
   }
 
@@ -2192,6 +2476,16 @@ async function main() {
     check('the editor says the sync finished', eText().includes('已同步到服务器'))
     check('the save left the editor open on the entry', Boolean(editorNode()))
 
+
+    // Escape steps back out of the editor before it steps out of the card — a
+    // reader who opened the wrong entry should not lose the card underneath as
+    // well. Only after the editor is gone does another Escape close the card.
+    check('Escape is claimed while the editor is open', press('Escape') === true)
+    await act(async () => { await sleep(40) })
+    check('Escape closes the editor, not the card', !editorNode() && nodeWith('data-vw-detail').length === 1)
+    check('a card is still open for the second Escape', press('Escape') === true)
+    await act(async () => { await sleep(40) })
+    check('the second Escape closes the card', nodeWith('data-vw-detail').length === 0)
     // A conflict: the host refuses a write whose own copy moved on, and the
     // editor must say so rather than offering a retry that would overwrite.
     const conflictRpc = makeRpc({
@@ -2645,7 +2939,7 @@ async function main() {
     })
     const panel = await mountPanel(mod, {}, expiryRpc)
     const xText = () => JSON.stringify(panel.renderer.toJSON())
-    const xRows = () => panel.renderer.root.findAllByType('button').filter((node) => node.props.role === 'option')
+    const xRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
     const xInput = (type) => panel.renderer.root.findAllByType('input').find((node) => node.props.type === type)
     await act(async () => { xRows()[0].props.onClick() })
     await flush(80)
