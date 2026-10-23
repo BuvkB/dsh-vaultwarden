@@ -462,28 +462,46 @@ async function main() {
     // leads with. Asserting the contract, not a path string: a redesign must
     // not fail this for the wrong reason.
     //
-    // Three shapes carry two ideas: the shield outline (vault) and the keyhole
-    // (Bitwarden), both centred on the same axis. Monochrome throughout — every
-    // shape either inherits `currentColor` or is a plain outline, so the mark
-    // flips with the theme and introduces no colour of its own, and the two marks
-    // share one centre so the badge reads as composed rather than scattered.
+    // Two shapes carry two ideas: the shield outline (the vault) and a check
+    // inside it (the thing is unlocked and verified). The keyhole this mark
+    // used to carry was three shapes in a 16-unit box and read as a smudge at
+    // rail size; the check is one stroke with room around it, and it is the
+    // silhouette the plugin is recognised by in the host's navigation.
+    //
+    // Monochrome throughout — both shapes are stroke-only and inherit
+    // `currentColor`, so the mark flips with the theme and introduces no
+    // colour of its own, and the two share one centre so the badge reads as
+    // composed rather than scattered.
     const glyphSvg = JSON.parse(labelJson).children[0]
     const shapes = glyphSvg.children ?? []
     const paints = shapes.map((s) => String((s.props && (s.props.fill || s.props.stroke)) ?? ''))
     check('the settings label carries the vault glyph', labelJson.includes('vw-nav-glyph'), labelJson.slice(0, 120))
     check(
-      'the label glyph draws the shield and the keyhole',
-      shapes.length >= 3,
+      'the label glyph draws the shield and the check inside it',
+      shapes.length === 2,
       labelJson.slice(0, 200),
     )
-    // Both marks on one vertical axis: the keyhole's two shapes are centred on
-    // x=8 and so is the shield's outline, which is what gives the badge a centre
-    // of gravity. Drawing them on different axes is the mistake this guards.
-    const centred = shapes.filter((s) => s.props && s.props.cx === 8)
+    // The check sits on the shield's own axis and inside its outline: a tick
+    // drawn outside the shield or off its centre reads as two unrelated marks.
+    const tick = shapes[1]
+    const tickPoints = String(tick?.props?.d ?? '')
+      .match(/-?\d+(\.\d+)?/g)
+      ?.map(Number) ?? []
+    const tickXs = tickPoints.filter((_, index) => index % 2 === 0)
+    const tickYs = tickPoints.filter((_, index) => index % 2 === 1)
     check(
-      'the keyhole is centred on the shield axis',
-      centred.length >= 1,
-      JSON.stringify(shapes.map((s) => s.props && s.props.cx)),
+      'the check is centred on the shield axis and inside its outline',
+      tickXs.length > 0 &&
+        tickYs.length > 0 &&
+        Math.abs(tickXs.reduce((a, b) => a + b, 0) / tickXs.length - 8) <= 1.2 &&
+        Math.min(...tickYs) > 3 &&
+        Math.max(...tickYs) < 13,
+      JSON.stringify({ tickXs, tickYs }),
+    )
+    check(
+      'no keyhole is left behind (the check replaced it)',
+      !shapes.some((s) => s.props && s.props.cx !== undefined),
+      labelJson.slice(0, 200),
     )
     check(
       'the label glyph is monochrome: every shape inherits the ink',
@@ -2028,26 +2046,28 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
-  // The rail's arrival uses the panel's one "content appearing" rhythm: the
-  // rows stagger 18ms apart in DOM order (headings included, so a group
-  // heading arrives one beat before its rows), and the skeleton itself does
-  // not animate its arrival — it was already on screen.
+  // The rail is chrome, not content: it has no arrival to animate. It used to
+  // stagger its rows 18ms apart like a page of entries, but every frame that
+  // re-inserted the rail replayed that arrival — the phone's drill state did
+  // exactly that on 返回列表, so the sidebar looked like it flashed. The staged
+  // arrival belongs to the entry rows, which really are new.
   {
     const sheet = mod.__panelSheet?.() ?? panelSheetText
     check(
-      'the rail fills in on the same 18ms cadence as the entry list',
-      /\[data-vw-nav\] > \*:nth-child\(2\)\s*\{ animation-delay: 18ms \}/.test(sheet),
-      'rail stagger rule missing',
+      'the rail does not animate its rows in (no arrival to replay)',
+      !/\[data-vw-nav\] > \[[^{]*\{[^}]*animation:/.test(sheet) &&
+        !/\[data-vw-nav\] > \*:nth-child\(\d+\)\s*\{[^}]*animation-delay/.test(sheet),
+      'an arrival animation is back on the rail rows',
+    )
+    check(
+      'the entry list keeps the panel\u2019s one staggered arrival',
+      /\[data-vw-list\] > \[data-row\]:nth-child\(2\)\s*\{ animation-delay: 18ms \}/.test(sheet),
+      'the entry rows lost their stagger (the rail was supposed to give it up, not take it with it)',
     )
     check(
       'the rail\u2019s own height is not animated (auto \u2192 auto cannot ease)',
       !/\[data-vw-nav\]\s*\{[^}]*transition:\s*height/.test(sheet),
       'a height transition is back on the rail',
-    )
-    check(
-      'reduced motion turns the rail\u2019s arrival off rather than shortening it',
-      /prefers-reduced-motion[\s\S]*\[data-vw-nav\] \[data-vw-section\]/.test(sheet),
-      'reduced-motion rule does not cover the rail rows',
     )
   }
 
