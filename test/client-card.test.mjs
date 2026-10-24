@@ -587,7 +587,9 @@ async function main() {
   check('opening no longer asks for config and session separately', !rpc.calls.some((call) => call.method === 'session'))
   check('a revived session is drawn without a fresh login', !rpc.calls.some((call) => call.method === 'connect'))
 
-  check('panel shows the vault size', text().includes(`共 ${ITEM_COUNT} 条`))
+  // The standing entry count is gone by design: the toolbar carries only
+  // the transient refresh word, so at rest the slot renders nothing.
+  check('the toolbar keeps no standing entry count', !text().includes(`共 ${ITEM_COUNT} 条`))
   check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
 
@@ -661,6 +663,44 @@ async function main() {
       if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator)
       else delete globalThis.navigator
     }
+  }
+
+  // A read in flight must not disable the control. `disabled` drops a button out
+  // of every `:not(:disabled)` rule, and the hover wash lives in one of those —
+  // so the control went dead exactly while the pointer was resting on it, which
+  // read as "the hover sometimes does nothing". The island also takes the next
+  // step of the host's interaction scale: it already wears the row's hover wash,
+  // and painting the same wash on a control inside it is a wash on a wash.
+  {
+    let release = null
+    const slowRpc = makeRpc({
+      reveal: () => new Promise((resolve) => { release = () => resolve({ ok: true, value: REVEALS['item-1'] }) }),
+    })
+    const panel = await mountPanel(mod, {}, slowRpc)
+    const islandOf = (row) => row.findAll((node) => node.props?.['data-vw-row-actions'] === '')[0]
+    const passOf = (row) => islandOf(row).findAllByType('button').find((node) => node.props['aria-label'] === '复制密码')
+    const firstRow = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')[0]
+    const control = passOf(firstRow())
+    let pending = null
+    await act(async () => {
+      pending = control.props.onClick({ stopPropagation: () => {} })
+      await sleep(20)
+    })
+    check('a password read leaves the control enabled under the pointer', passOf(firstRow()).props.disabled !== true, String(passOf(firstRow()).props.disabled))
+    check('a password read is announced busy instead of disabled', passOf(firstRow()).props['aria-busy'] === 'true', String(passOf(firstRow()).props['aria-busy']))
+    await act(async () => {
+      release?.()
+      await pending
+      await sleep(20)
+    })
+    check('the control is idle again once the read lands', passOf(firstRow()).props['aria-busy'] === undefined, String(passOf(firstRow()).props['aria-busy']))
+    const sheet = mod.__panelSheet?.() ?? panelSheetText
+    check(
+      'the island stacks its own hover on the wash it already wears',
+      /\[data-vw-row-actions\] button:not\(:disabled\):hover \{ background: var\(--dsw-alias-interactive-bg-active/.test(sheet),
+      'the island controls still hover with the same wash as the row behind them',
+    )
+    await act(async () => { panel.renderer.unmount() })
   }
 
   // ── the panel's shortcuts ────────────────────────────────────────────────
@@ -983,7 +1023,9 @@ async function main() {
     const listCalls = () => bigRpc.calls.filter((call) => call.method === 'list')
     check('the first read asks for one small page', listCalls()[0]?.args.limit === 50 && listCalls()[0]?.args.offset === undefined, JSON.stringify(listCalls()[0]?.args))
     check('a large vault paints only the first page', optionRows(panel.renderer).length === 50, `rows=${optionRows(panel.renderer).length}`)
-    check('the total still counts the whole vault', JSON.stringify(panel.renderer.toJSON()).includes(`共 ${BIG_COUNT} 条`))
+    // The server still reports the vault total, but the toolbar no longer
+    // renders a standing count of it.
+    check('no standing total renders while paging', !JSON.stringify(panel.renderer.toJSON()).includes(`共 ${BIG_COUNT} 条`))
 
     // Reaching the bottom asks for the next page and appends it.
     const scroller = () => panel.renderer.root.findByProps({ 'data-scroll-area': '' })
@@ -2050,7 +2092,7 @@ async function main() {
     const ghostIconBox = ghosts()[0].findAll((node) => node.props?.style?.width === 16)[0]
     check(
       'a ghost row borrows the real row\u2019s metrics, not a guessed height',
-      ghostRowStyle.gap === 10 && ghostRowStyle.padding === '8px 10px' && ghostRowStyle.fontSize === 13 && Boolean(ghostIconBox),
+      ghostRowStyle.gap === 8 && ghostRowStyle.padding === '9px 12px' && ghostRowStyle.fontSize === 14 && Boolean(ghostIconBox),
       JSON.stringify({ gap: ghostRowStyle.gap, padding: ghostRowStyle.padding, fontSize: ghostRowStyle.fontSize, icon: Boolean(ghostIconBox) }),
     )
 
