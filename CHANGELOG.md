@@ -4,6 +4,43 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] — 2026-10-24
+
+修复审计发现的一个 P0 会话缺陷、一处未接线的日志调用和九个边界缺陷，并把面板与轮询的几处热点降为常数工作。无破坏性变更。
+
+### 修复（安全 / 会话）
+
+- **P0：会话文件的 userKey 从未成功写入**（vault.js persistSession）。`token.userKey` 是 `{enc, mac}` 对象，旧的 `Buffer.from(this.token.userKey)` 直接抛 `ERR_INVALID_ARG_TYPE`：解锁后第一次刷新令牌就会让那次 RPC 以 TypeError 失败，且会话文件里留的是已轮换作废的旧 refresh token——Vaultwarden 的 refresh token 是一次性的，重启后只能重新输主密码（开两步验证的还要再过一遍 2FA）。实测线上会话文件 `userKey` 一直是 `null`。现在序列化为 `{enc, mac}` 两段 base64（兼容旧的 mac:null 形态），恢复端对应解析；刷新路径的持久化失败只记事件不再拖垮 RPC；首次解锁成功后立即补写一次，不用等下次刷新。
+- 刷新令牌轮换失败不再静默丢会话：`persistSession` 的异常被隔离为一条 `session_not_persisted` 事件，内存中的令牌照常可用。
+- **VaultClient.log 从未赋值**（构造器收不到 host 日志器，但后台同步和 applyCipher 的 catch 会调它）：一次解密失败会把 TypeError 抛回给一次已经成功的写调用，面板把成功写成失败。构造器现在兜底 `(() => {})`，index.js 把 host 日志接进来。
+- /api 请求收到 401 时立即把内存里的 access token 置为过期：撤销 / 被别的客户端轮换出去的令牌不再拖到自然过期（最长约一小时）才恢复，下一次调用就走刷新授权。会话文件里的 refresh token 不动。
+- 共享解锁航班不再吃第一个调用者的 AbortSignal：注释一直说"故意不传"，实现却传了——第一个调用者取消会连带取消所有人正在读的库。
+- httpJson 的超时与中止监听一直守到响应体读完为止：旧的实现在读 body 前就拆掉了定时器，一个只发响应头然后慢慢滴 body 的服务器会让请求挂到 undici 的 ~300 秒默认上限。
+- invalidate() 现在连带清掉服务器连通性探针：切换账户 / 重配服务器后，status() 不再用旧服务器的探针结果顶最多 5 分钟。
+- 调小 sessionDays 后立即生效：设置写入时就会驱逐过期的内存会话并删除会话文件，不再等下次重启。
+- 切换账户 / 服务器时删除旧账户的会话文件，而不是留一个仍然可用的 refresh token 在盘上。
+- 退出登录时把内存里的分区行缓存和侧栏计数一并清掉，下一次打开不再重绘上一个账户的行和数字。
+- 通知重连风暴：升级尝试（轮询→WebSocket）失败后按 2 的幂退避（上限 30 分钟），WebSocket 稳定连接后归零；没有令牌时直接跳过升级尝试——半残 hub 上原来每 30–120 秒重复三轮 negotiate + WS + 完整登录 + KDF。
+
+### 效率
+
+- 轮询 tick 先探测账户 revision（13 字节），未变化就跳过整库下载 + 解密 + gzip + fsync 的完整同步；hub 推送仍走无条件同步。
+- 系统提示注入从 1280 字符缩到约 300：逐工具的使用细节本就在工具描述里，每个会话不再重复注入。
+- 面板列表行提取为 `react.memo` 组件：搜索击键、图标批量到达、轮询 tick 不再重建 50 行 × ~15 节点的行树。
+- TOTP 每窗只取一次：倒计时用取回的答案做算术推导，50 行的验证码区从每秒 50 次 RPC 降到每 30 秒 1 次。缓存按面板的 invoke 隔离，换面板/换测试夹具不串窗。
+- 重开快照写盘加了指纹去重：内容没变的刷新（典型：轮询 tick）不再重复 JSON.stringify 整个列表再写 localStorage。
+- 搜索打分的小写五个字段文本按条目缓存（WeakMap），重投影自然失效；400 条库的每次击键不再重分配全部 haystack。
+- overview() 从 O(条目 × (类型 + 文件夹)) 的多重 filter 改为单遍计数。
+- 面板与网关之间不再双向 JSON 序列化：status / folderList 提供对象形态（statusReport / folderListData），网关直接用；模型工具路径仍输出字符串。
+- revealEntry 直接返回投影对象，不再 stringify 后立刻 parse 回来。
+- searchPayload 的归档计数并入池构建那一遍，去掉重复的整库过滤。
+- TOTP 等窗的 sleep 定时器 unref：等待不再拖住宿主事件循环。
+
+### 测试
+
+- 新增：刷新后 userKey 持久化与轮换令牌落盘的回归（mock-e2e +3）；轮询先探测后同步 / revision 变化才同步（live-sync +1）；TOTP 每窗一次取数（client-card +2）；系统提示瘦身断言更新（host-entry）。
+- 全量 12 套 915 项通过（mock-e2e 68、client-card 396、stress-time 79、cache-store 74、stress-cache-chain 72、stress-concurrency 55、stress-malformed 39、stress-scale 39、host-entry 28、live-sync 26、session-resilience 22、access-mode 17）。
+
 ## [0.9.6] — 2026-10-23
 
 Panel polish, no behaviour changes to the vault itself. No breaking changes.

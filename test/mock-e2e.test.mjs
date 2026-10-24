@@ -242,6 +242,36 @@ async function main() {
   const newGrants = server.stats.tokenGrants.slice(grantsBefore)
   check('expired access token is refreshed, not re-logged-in', newGrants.includes('refresh_token') && server.stats.refreshes === 1, JSON.stringify(newGrants))
 
+  // 6b. refresh after unlock persists the rotated token + user key -----------
+  // The user key only exists once the vault has been unlocked, and it is an
+  // {enc, mac} pair — not a Buffer. Serializing it with Buffer.from used to
+  // throw inside persistSession, which (a) failed the RPC that triggered the
+  // refresh and (b) left the PRE-rotation refresh token in the session file,
+  // so the next restart lost the session entirely.
+  {
+    const { SessionStore } = await import('../lib/session-store.js')
+    const { mkdtempSync, readFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'vw-e2e-userkey-'))
+    const file = join(dir, 'session.json')
+    const store = new SessionStore(file, { maxAgeDays: 30 })
+    let clock = Date.now()
+    const unlockedClient = new VaultClient(
+      settingsFor(server, { cacheMinutes: 0 }),
+      { sessionStore: store, now: () => clock },
+    )
+    await unlockedClient.unlock()
+    const stored = JSON.parse(readFileSync(file, 'utf8'))
+    check('unlock persists the stretched user key', typeof stored.userKey === 'string' && stored.userKey.includes('enc'), JSON.stringify(stored.userKey))
+    const preRotation = stored.refreshToken
+    clock += 3600 * 1000 + 120_000
+    await unlockedClient.find('github') // expired → refresh → persist
+    const rotated = JSON.parse(readFileSync(file, 'utf8'))
+    check('refresh after unlock keeps the RPC alive', rotated.userKey?.includes('enc'), 'persistSession threw again')
+    check('session file carries the rotated refresh token', rotated.refreshToken !== preRotation && rotated.refreshToken === unlockedClient.token.refreshToken, 'file still holds the pre-rotation token')
+  }
+
   // 7. API key auth ------------------------------------------------------------
   const apiClient = new VaultClient(
     settingsFor(server, {

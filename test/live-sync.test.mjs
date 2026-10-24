@@ -11,7 +11,10 @@
  */
 import { VaultClient } from '../lib/vault.js'
 import { NotificationChannel, NotificationType } from '../lib/notifications.js'
+import { CacheStore } from '../lib/cache-store.js'
 import { EMAIL, PASSWORD, startMockServer } from './mock-server.mjs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 let passed = 0
 let failed = 0
@@ -97,15 +100,27 @@ async function main() {
   client.stopLiveSync()
 
   // 4. polling when WebSocket is disabled --------------------------------------
-  const poller = new VaultClient(settingsFor(server, { websocket: false }))
+  // The revision fast path needs a cache store to compare against; wire one
+  // so the poll-probe behaviour below is exercised.
+  const pollCache = new CacheStore(join(tmpdir(), 'live-sync-poll-cache.json'), { enabled: true })
+  const poller = new VaultClient(settingsFor(server, { websocket: false }), { cacheStore: pollCache })
   await poller.unlock()
   const polling = poller.startLiveSync({ pollIntervalMs: 2000, minPollIntervalMs: 1000, websocket: false })
   check('websocket disabled → polling mode', polling.mode === 'polling')
+  // An unmoved revision must not cost a full sync: the tick probes first and
+  // skips. Only when the server really moved does the tick download again.
+  const quietSyncs = server.stats.syncs
+  const quietChecks = server.stats.revisionChecks
+  const quiet = await waitFor(() => server.stats.revisionChecks > quietChecks, { timeout: 9000 })
+  check('an unchanged revision costs a probe, not a sync', quiet && server.stats.syncs === quietSyncs,
+    'probes ' + quietChecks + '→' + server.stats.revisionChecks + ', syncs ' + quietSyncs + '→' + server.stats.syncs)
+  server.bumpRevision()
   const pollSyncs = server.stats.syncs
   const polled = await waitFor(() => server.stats.syncs > pollSyncs, { timeout: 9000 })
-  check('polling re-syncs on its interval', polled, `syncs ${pollSyncs}→${server.stats.syncs}`)
+  check('a moved revision makes the poll re-sync', polled, 'syncs ' + pollSyncs + '→' + server.stats.syncs)
   check('the poll floor is enforced by default', new VaultClient(settingsFor(server)).startLiveSync({ websocket: false }).pollIntervalMs >= 30000, 'default floor')
   poller.stopLiveSync()
+
 
   // 5. hub unreachable (proxy blocks the upgrade) → polling ---------------------
   const blocked = new VaultClient(settingsFor(server))

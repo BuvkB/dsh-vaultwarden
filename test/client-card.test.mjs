@@ -859,6 +859,33 @@ async function main() {
     }
     check('the arc only ever grows shorter as the window closes', offsets[0] < offsets[1] && offsets[1] < offsets[2], JSON.stringify(offsets))
 
+    // ── one window, one fetch ────────────────────────────────────────────────
+    // The countdown used to cost an RPC per second per row: fifty rows was
+    // fifty calls a second for a code that changes once per window. The window
+    // is now fetched once and the countdown is arithmetic on it. This mounts a
+    // fresh panel with a counting totp mock, lets three clock beats pass, and
+    // pins that the fetches stayed at one.
+    {
+      let totpCalls = 0
+      const rpc = makeRpc({
+        totp: () => { totpCalls += 1; return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 28, remaining: 28, algorithm: 'SHA1' } } } },
+      })
+      const panel = await mountPanel(mod, {}, rpc)
+      await act(async () => {
+        optionRows(panel.renderer)[0].props.onClick()
+      })
+      await flush()
+      const afterOpen = totpCalls
+      await act(async () => {
+        await sleep(3200)
+      })
+      check('three seconds of countdown cost one window fetch', totpCalls === afterOpen, 'calls ' + afterOpen + '→' + totpCalls)
+      check('the code is still on screen after the beats', /\b123456\b/.test(text()), 'totp calls ' + totpCalls)
+      await act(async () => {
+        panel.renderer.unmount()
+      })
+    }
+
     // A browser without color-mix() must snap to the nearer end of the ramp,
     // never drop the stroke: an invisible arc reads as "no countdown at all".
     if (savedCSS === undefined) delete globalThis.CSS
