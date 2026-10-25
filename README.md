@@ -84,6 +84,8 @@ bitwarden_update  { "id": "…", "archived": true }      → 归档 / false 取�
 bitwarden_delete  { "id": "…" }                        → 软删进回收站（需 accessMode=ask/auto）
 bitwarden_delete  { "id": "…", "permanent": true, "confirm": true } → 彻底删除（不可逆，必须带 confirm）
 bitwarden_restore { "id": "…" }                        → 从回收站恢复（需 accessMode=ask/auto）
+bitwarden_reveal  { "id": "…", "field": "password" }  → 占位符脱敏模式下取回明文（见下节）
+bitwarden_sweep   { }                                  → 立即擦除本地会话日志中的 bitwarden 明文（见下节）
 ```
 
 ### 取 TOTP 为什么需要 waitFresh
@@ -107,6 +109,39 @@ bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
 | 条目开了「重新验证」且未解锁 | 返回 `repromptRequired: true` |
 | `field` 不是 `totp` | `waitFresh` 被忽略 |
 | `minRemaining: 0` | 不等，立即返回（哪怕只剩 1 秒） |
+
+## 本地脱敏（magpie 式）：占位符 + 按需取回 + 日志擦除
+
+默认关闭。两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
+
+### 占位符脱敏（maskMode）
+
+开启后 `bitwarden_get` 不再返回明文，而是稳定的占位符：
+
+```
+bitwarden_get { "id": "…", "field": "password" }
+→ { "password": "{{BW_PASSWORD_vfvyvkan}}", … }
+```
+
+- **稳定**：占位符 = HMAC-SHA256(条目 id + 字段名 + 值) 的前 8 位 base32，同一值恒得同一占位符——可以引用、比较、判断改没改，但反推不出原值，别的条目/字段盐不同也得不到同一个标签。密钥是独立的 `data/dsh-vaultwarden/mask.key`（0600），不与缓存密钥混用。
+- **覆盖**：password、TOTP 码、notes、安全笔记正文、自定义字段值、卡号与安全码、SSH 私钥、密码历史、身份证明文编号（SSN/护照/驾照）。用户名、品牌、指纹等「句柄」类信息照常返回——它们本身不是机密，遮了只会让模型没法干活。
+- **取回**：确因任务需要明文（登录、填表、派生 token）时，`bitwarden_reveal` 按条目 + 字段单次取回。reveal 走的是与 get 相同的读取路径（含 reprompt 闸门），用完即弃。
+- 模型侧协议在 maskMode 开启时自动写进系统提示词，无需人工提醒。
+
+### 日志擦除（sweepMode / bitwarden_sweep）
+
+DSH 会话日志（`~/.dsh/sessions/` 下的 `session.v*.jsonl.zstd`）会把工具参数与结果原文落盘——reveal 取回的明文、以及 `bitwarden_create/update` 写入的密码都会留在里面。开启日志擦除后，插件在间隔到期时扫描**已空闲**（会话锁 10 分钟无动静）的日志，把其中 bitwarden 工具事件里的明文替换为 `[REDACTED:BW]`，占位符原样保留：
+
+- 只动 bitwarden 工具的参数与结果（通过 callId 关联），其他工具的记录与用户消息逐字节不动。
+- 幂等：擦过的日志再扫一遍是空操作；重写保留文件权限与时间戳（时间戳是空闲判定依据，不能被重写重置）。
+- 进行中的会话跳过——擦除绝不与宿主写入并发。会话结束后下一次定时扫描会补上。
+- 独立进程调用系统 `zstd` 解压/重压缩，宿主未装 zstd 时报错跳过，不影响其他日志。
+
+### 残留风险（如实说明）
+
+- reveal 拿到明文到下一次擦除之间存在**落盘窗口**；擦除的默认空闲判定 10 分钟 + 定时间隔都会拉长它。介意就把间隔调小，或每次用完立刻 `bitwarden_sweep`。
+- 擦的是**磁盘**，不改模型已经看到的内容。
+- `~/.dsh/backups`、cost-meter ledger 等插件够不着的落盘点不在覆盖范围。
 
 ## 用法（人侧）
 
@@ -198,6 +233,8 @@ bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线�
 | --- | --- |
 | `test/peer-ranges.test.mjs`（34） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
 | `test/mock-e2e.test.mjs`（54） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 / 分区计数与分区读取 |
+| `test/mask.test.mjs`（29） | 占位符脱敏：标签稳定性 / 条目与字段加盐 / 幂等（已是占位符不再包一层）/ 字段覆盖面（password、TOTP 码、notes、自定义字段、卡号与安全码、SSH 私钥、密码历史、SSN；句柄类保留）/ mask.key 0600 与 32 字节 / 默认路径 |
+| `test/sweeper.test.mjs`（19） | 日志擦除：合成 session.v4.jsonl.zstd 上明文消失、占位符与非 bitwarden 行逐字节不动、callId 两阶段关联（结果行不含工具名也能擦）、幂等（标记不再被重擦）、busy 会话跳过、权限与时间戳保留、无锁导出副本视为空闲 |
 | `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
 | `test/live-sync.test.mjs`（22） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
 | `test/mutations.test.mjs`（39） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |

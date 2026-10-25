@@ -2281,6 +2281,42 @@ async function main() {
     )
   }
 
+  // ── scroll position: a section switch may not remount the scroll area ────
+  // A switch to a place whose rows are not cached flips the panel through
+  // refreshing and back. The surface wrapper used to key on the raw status,
+  // so those flips swapped the whole pane — scroll container included — and
+  // the reader's position jumped to the top (reported: 下滑后点「未归类」回到
+  // 顶部). The wrapper now keys ready/refreshing/loading as one 'vault'
+  // surface, so the container instance survives every flip.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    const scrollArea = () => panel.renderer.root.findAll((node) => node.props?.['data-scroll-area'] === '')[0]
+    const before = scrollArea()
+    check('the scroll area is on screen after the first read', Boolean(before))
+    // The same instance the whole time the panel sits still.
+    await flush()
+    check('a quiet repaint keeps the scroll container', scrollArea() === before)
+    // Switch to 未归类 — a place with no cached section — and let the real
+    // read run its full refreshing → ready round trip.
+    const unfiled = panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === 'unfiled')[0]
+    check('the 未归类 place is on screen', Boolean(unfiled))
+    await act(async () => { unfiled.props.onClick() })
+    await flush()
+    await flush()
+    check(
+      'a section switch keeps the scroll container mounted',
+      scrollArea() === before,
+      'container remounted across the switch',
+    )
+    // And a second switch (back to 全部条目) through the now-populated cache.
+    const all = panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === 'all')[0]
+    await act(async () => { all.props.onClick() })
+    await flush()
+    check('switching back keeps the container too', scrollArea() === before)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   // ── favicons: the server's icon when it has one, the tile otherwise ───────
   // The server already caches site icons and answers at /icons/<host>/icon.png,
   // so the panel renders an <img> straight away — and asks once per host
@@ -2905,7 +2941,7 @@ async function main() {
       return json
     }
     const rowKeys = Object.keys(mod.__toolRow.keys ?? {})
-    check('every bitwarden tool has a transcript row registered', rowKeys.length === 9 && rowKeys.every((k) => k.startsWith('bitwarden_')), rowKeys.join(','))
+    check('every bitwarden tool has a transcript row registered', rowKeys.length === 11 && rowKeys.every((k) => k.startsWith('bitwarden_')), rowKeys.join(','))
     const rows = renderToolRow('bitwarden_get', {
       id: 'item-1',
       name: 'github.com',

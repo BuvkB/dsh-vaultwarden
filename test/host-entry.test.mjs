@@ -127,6 +127,11 @@ async function main() {
     return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
   })())
   check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /凭据库/.test(section.text) && section.text.length <= 400))
+  // Regression: the mask guidance quotes a literal `{{BW_<类型>_<标签>}}`. The host
+  // interpolates every section by default and throws `malformed prompt variable
+  // reference` on any `{{…}}` that is not `^[a-z][a-z0-9_]*$`, which aborted the
+  // whole prompt assembly (first turn failed). The section must opt out.
+  check('prompt guidance section opts out of host interpolation', sections.every((section) => section.name !== 'bitwarden-vault' || section.interpolate === false), JSON.stringify(sections.map((s) => ({ name: s.name, interpolate: s.interpolate }))))
   check('registers effects with labels (cleanup contract)', effects.length >= 8 && effects.every((label) => typeof label === 'string' && label.startsWith('dsh-vaultwarden:')), `${effects.length} effects`)
   check('mounts the Remote gateway instead of an HTTP route', plugins.length === 1 && plugins[0].plugin?.name === 'VaultGateway' && typeof plugins[0].config?.getClient === 'function', JSON.stringify(plugins.map((entry) => entry.plugin?.name)))
 

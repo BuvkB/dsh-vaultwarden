@@ -4,6 +4,36 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-10-26
+
+审计驱动的脱敏修复：sweeper 漏擦通道补齐、跨日志与跨轮次回显猎杀、maskProjection 两处漏脱敏。默认全关不变。
+
+### 修复
+
+- sweeper 漏擦通道：tool/ptc-dispatch(-start) 与 tool/code-dispatch(-start) 事件（code 模式下明文的主要通道）纳入类型门与 fast-path；plugin:translator、job 事件纳入。
+- listSessionLogs 改为收集所有目录的全部 session.v*.jsonl.zstd 版本（原 session-* 前缀过滤漏 68 个裸 UUID 目录，最高版本择优漏旧版本日志）。
+- 嵌入 JSON 判定从 40 字符阈值改为以 { 或 [ 开头的形状判定；replaceKnownValues 对字符串值按 { / [ 形状下钻递归。
+- phase 3 按值擦除：从 bitwarden 事件收割明文值（>=6 字符），在全工具事件文本字段猎杀回显（run_code 聚合结果内嵌子调用输出的通道）；ECHO_KEY_RE 覆盖 function/script/expression/value/fields/old_string/new_string/summary/oldText/newText 等键。
+- sweepAll 两遍清扫：pass 1 全日志（含 busy）只读收割种子，pass 2 带全集逐日志擦除，跨日志回显（A 日志明文被 B 日志 bash 回显）不再漏。
+- 跨轮种子持久化 data/dsh-vaultwarden/swept-secrets.json（0600）：本轮 busy 的日志闲置后，下一轮仍能借种子擦掉其回显（源事件已擦时 phase 1 无法重新收割）。
+- maskProjection：field=sshKey 的顶层 {privateKey,...} 投影形状补脱敏（原只认 item.sshKey.privateKey 包裹形状，私钥漏出）；隐藏字段哨兵 '<hidden>' 不再被二次包裹成 {{BW_FIELD_*}}（破坏 UI 判定与占位符语义）。
+
+### 测试
+
+- sweeper.test.mjs 19→34 断言（ptc 通道、裸目录、旧版本、短嵌入 JSON、跨日志回显、种子持久化）；mask.test.mjs 29→37（projectItem 全投影形状：reprompt 门、totp、all、sshKey 顶层、card、<hidden> 哨兵）；mock-e2e 68→77（真实 client 的 maskMode 占位符/reveal 语义场景）。
+
+## [0.10.0] — 2026-10-25
+
+magpie 式本地脱敏：占位符、按需取回、日志擦除。默认全关，行为向后兼容。
+
+### 新增
+
+- 设置「占位符脱敏」（maskMode）：开启后 bitwarden_get 返回 {{BW_<类型>_<标签>}} 占位符；标签为 HMAC-SHA256(条目 id+字段名+值) 前 8 位 base32，同值恒同占位符，密钥存 data/dsh-vaultwarden/mask.key（0600）。
+- 工具 bitwarden_reveal：maskMode 下按条目+字段单次取回明文。
+- 设置「日志擦除」（sweepMode）与 bitwarden_sweep：扫描本地 DSH 会话日志，把 bitwarden 工具事件中已落盘的明文（password/totp/卡号/安全码/私钥等）替换为 [REDACTED:BW]，占位符保留；进行中会话跳过；重写保留权限与时间戳，幂等。
+- 设置「擦除间隔（分钟）」：定时扫描，默认 30，0 关闭。
+- 系统提示词在 maskMode 下追加占位符协议说明。
+
 ## [0.9.8] — 2026-10-24
 
 面板交互与字面统一对齐宿主，一处悬停缺陷修复。无破坏性变更。

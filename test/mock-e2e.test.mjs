@@ -14,6 +14,8 @@
  * Run: node test/mock-e2e.test.mjs
  */
 import { VaultClient, VaultError } from '../lib/vault.js'
+import { maskProjection, loadMaskKey } from '../lib/mask.js'
+import { mkdtempSync, rmSync, writeFileSync as wfs } from 'node:fs'
 import { EMAIL, PASSWORD, TWO_FACTOR_CODE, startMockServer } from './mock-server.mjs'
 
 let passed = 0
@@ -317,6 +319,54 @@ async function main() {
     `items=${orphanVault.items.length} skipped=${orphanVault.skipped}`,
   )
   await orphanServer.close()
+
+  // 13. maskMode: placeholders out, reveal is the door -------------------------
+  {
+    const tmp = mkdtempSync('/tmp/bw-mask-e2e-')
+    try {
+      const keyPath = tmp + '/mask.key'
+      const key = Buffer.alloc(32, 7)
+      wfs(keyPath, key, { mode: 0o600 })
+      const loaded = loadMaskKey(keyPath)
+      check('mask key loads (32 bytes)', loaded?.length === 32)
+
+      const client13 = new VaultClient(settingsFor(server))
+      await client13.unlock()
+
+      const rawAll = await client13.get('cipher-github', 'all', undefined, { maskHiddenFields: true })
+      const proj = JSON.parse(rawAll)
+      maskProjection(proj, loaded, 'cipher-github')
+      check('password becomes placeholder', /^\{\{BW_PASSWORD_[a-z2-7]{8}\}\}$/.test(proj.password), 'got ' + proj.password)
+      check('username stays plaintext', proj.username === 'octocat@jindom.cc')
+      check('notes masked', !proj.notes?.includes('SSH'))
+      const rawPw = await client13.get('cipher-github', 'password', undefined, {})
+      const proj2 = JSON.parse(rawPw)
+      maskProjection(proj2, loaded, 'cipher-github')
+      check('field=password masked with same tag', proj2.password !== 'gh-p@ssw0rd-42' && proj.password === proj2.password)
+
+      const rawHidden = await client13.get('cipher-github', 'fields', undefined, {})
+      const proj3 = JSON.parse(rawHidden)
+      maskProjection(proj3, loaded, 'cipher-github')
+      const hidden = proj3.fields?.find((f) => f.name === 'API Token')
+      check('hidden field value masked', Boolean(hidden) && !String(hidden.value).includes('tok_live_abc123'), 'got ' + hidden?.value)
+
+      const rawCard = await client13.get('cipher-org', 'card', undefined, {})
+      const proj4 = JSON.parse(rawCard)
+      maskProjection(proj4, loaded, 'cipher-org')
+      check('card number masked', !JSON.stringify(proj4).includes('4111'))
+
+      // placeholder determinism across two independent projections
+      const again = JSON.parse(await client13.get('cipher-github', 'password', undefined, {}))
+      maskProjection(again, loaded, 'cipher-github')
+      check('placeholder deterministic', again.password === proj.password)
+
+      // reveal path: same get without masking still yields plaintext
+      const plain = await client13.get('cipher-github', 'password', undefined, {})
+      check('reveal path returns plaintext', JSON.parse(plain).password === 'gh-p@ssw0rd-42')
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  }
 
   // 12. Argon2id KDF -----------------------------------------------------------
   const argonServer = await startMockServer({ kdf: 1, kdfIterations: 3, kdfMemory: 64, kdfParallelism: 4 })
