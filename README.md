@@ -110,9 +110,14 @@ bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
 | `field` 不是 `totp` | `waitFresh` 被忽略 |
 | `minRemaining: 0` | 不等，立即返回（哪怕只剩 1 秒） |
 
-## 本地脱敏（magpie 式）：占位符 + 按需取回 + 日志擦除
+## 本地脱敏：占位符 + 按需取回 + 日志擦除
 
-默认关闭。两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
+默认关闭。开启后分两层，各堵一个明文暴露面：
+
+- **模型侧（占位符脱敏，maskMode）**：`bitwarden_get` 不再返回明文，改返回与值一一对应的稳定占位符；确因任务需要明文时，`bitwarden_reveal` 按条目 + 字段单次取回。明文只在实际用到的那一刻进入模型上下文，其余时候上下文里只有推不回原值的占位符。
+- **磁盘侧（日志擦除，sweepMode）**：DSH 会把每次工具调用的参数与结果**原文写进硬盘**（`~/.dsh/sessions/` 下的会话日志）。擦除定时扫描这些日志，把其中 bitwarden 相关的明文替换为 `[REDACTED:BW]`，其他内容逐字节不动。
+
+两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
 
 ### 占位符脱敏（maskMode）
 
