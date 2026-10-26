@@ -119,6 +119,45 @@ bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
 
 两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
 
+### 数据流一览
+
+```mermaid
+flowchart TD
+  subgraph NET["凭据库服务器（只见密文）"]
+    SRV[("Vaultwarden / Bitwarden 服务器<br/>只存密文")]
+  end
+  subgraph LOCAL["本机 dsh-vaultwarden 插件进程"]
+    direction TB
+    CLIENT["unlockKeys()<br/>Argon2 派生主密钥（hash-wasm，本地）"]
+    DEC["AES 解密 vault<br/>明文投影只存在于内存"]
+    MASK["maskProjection()<br/>password / TOTP / notes / 卡号 / 私钥<br/>→ {{BW_KIND_8位tag}}"]
+    MKEY[("mask.key（0600）<br/>本地 HMAC 密钥")]
+    REVEAL["bitwarden_reveal<br/>设计上唯一的明文出口（用完即弃）"]
+  end
+  subgraph MODEL["模型上下文"]
+    GET["bitwarden_get 查询<br/>只看到占位符 {{BW_PASSWORD_vfvyvkan}}"]
+    FILL["拿明文登录目标服务<br/>（第三方系统 / API）"]
+  end
+  subgraph DISK["本机磁盘"]
+    LOG[("~/.dsh/sessions/<br/>session.v*.jsonl.zstd")]
+    SWEEP["sweepMode 定时擦除<br/>空闲会话才扫<br/>明文 → [REDACTED:BW]"]
+  end
+  MP[("目标服务<br/>（需要登录的第三方）")]
+  SRV -->|HTTPS 密文| CLIENT --> DEC
+  DEC -->|明文投影| MASK
+  MKEY -.读取.-> MASK
+  MASK -->|占位符| GET
+  GET -->|确需明文时, 模型主动调用| REVEAL
+  DEC -.同一份明文.- REVEAL
+  REVEAL -->|真密码一次性交付| FILL
+  FILL -->|账号 + 密码| MP
+  REVEAL -.回显瞬时落盘.-> LOG
+  FILL -.回显瞬时落盘.-> LOG
+  LOG --> SWEEP
+```
+
+**防护边界（如实）**：解密全程在插件进程内完成，凭据库服务器只见密文；`bitwarden_get` 默认只交付占位符；明文仅由 `bitwarden_reveal` 一次性交付给模型，落盘痕迹由日志擦除负责抹掉。换句话说——脱敏堵的是「默认外泄」，不是「按需取回」：需要明文的那一刻，模型仍然看得到真值。详见下文「残留风险（如实说明）」。
+
 ### 占位符脱敏（maskMode）
 
 开启后 `bitwarden_get` 不再返回明文，而是稳定的占位符：
