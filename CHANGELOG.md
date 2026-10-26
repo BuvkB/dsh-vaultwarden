@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-10-26
+
+sweeper 重写日志时的 zstd 分帧修复。会话不再因日志被判损坏而从工作区消失。
+
+### 修复
+
+- sweeper 把整份会话日志压成单个 zstd 帧，宿主 `readFirstZstdLine()` 只解第一帧并要求明文恰好一行（`assertZstdHeaderFrame`），于是抛 `SessionPersistenceCorruptionError: first frame is not exactly one header line`，该会话被排除在头部索引之外，随后在 `workspace.json` 下一次写入时被永久剔除——表现为会话从侧栏消失。
+- 改为与宿主 `encodeMaterialization` 一致的两帧写入：header 独立一帧、其余事件行另起一帧。空 body 时退化为单帧 header，仍可正常读回。
+
+### 测试
+
+- sweeper.test.mjs 34→37：新增分帧断言（magic 偏移扫描 ≥2 帧、首帧明文恰为一行、首帧以 `{"type":"session"` 开头）。
+
 ## [0.10.1] — 2026-10-26
 
 审计驱动的脱敏修复：sweeper 漏擦通道补齐、跨日志与跨轮次回显猎杀、maskProjection 两处漏脱敏。默认全关不变。

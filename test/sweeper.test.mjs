@@ -93,7 +93,8 @@ try {
   // ── single-log sweep ────────────────────────────────────────────────────────
   const result = sweepLog(idleLog, { skipIdleCheck: false })
   check('idle log reports redacted', result.status === 'redacted' && result.redacted > 0, JSON.stringify(result))
-  const after = zstdDecompress(readFileSync(idleLog))
+  const raw = readFileSync(idleLog)
+  const after = zstdDecompress(raw)
   const afterEvents = after.split('\n').filter(Boolean).map((l) => JSON.parse(l))
   const bwCallsAfter = afterEvents.filter((ev) => ev.type === 'tool/call' && String(ev.data?.name ?? '').startsWith('bitwarden_'))
   const bwResultsAfter = afterEvents.filter((ev) => ev.type === 'tool/result' && ev.data?.message?.toolCallId === 'c1')
@@ -110,6 +111,23 @@ try {
   check('user prose is never rewritten even when it names a secret', after.includes('is in my notes'))
   check('session header line survives', after.includes('"type":"session"'))
   check('permissions are preserved across the rewrite', (statSync(idleLog).mode & 0o777) === 0o640)
+
+  // The host reads the header via readFirstZstdLine(): it decompresses ONLY the
+  // first complete frame and requires exactly one line ending in a newline
+  // (assertZstdHeaderFrame). A sweep that re-encodes the whole log as one frame
+  // makes the host call the file corrupt — SessionPersistenceCorruptionError —
+  // and the session silently vanishes from the workspace index. Guard the frame
+  // layout, not just the textual content.
+  const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+  const frameOffsets = []
+  for (let i = raw.indexOf(ZSTD_MAGIC); i !== -1; i = raw.indexOf(ZSTD_MAGIC, i + 4)) frameOffsets.push(i)
+  check('a swept log keeps at least two zstd frames', frameOffsets.length >= 2, 'frames=' + frameOffsets.length)
+  if (frameOffsets.length >= 2) {
+    const firstFrame = raw.subarray(frameOffsets[0], frameOffsets[1])
+    const firstPlain = zstdDecompress(firstFrame)
+    check('the first frame decodes to exactly one header line', firstPlain.endsWith('\n') && firstPlain.indexOf('\n') === firstPlain.length - 1, JSON.stringify(firstPlain.slice(0, 80)))
+    check('the first frame is the session header', firstPlain.startsWith('{"type":"session"'))
+  }
 
   // idempotence: a second sweep finds nothing to do
   const second = sweepLog(idleLog)
