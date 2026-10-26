@@ -4,6 +4,12 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-10-26
+
+### 新增
+
+- bitwarden_get 工具描述补充 maskMode 说明：password/TOTP/卡号等字段返回 {{BW_*}} 占位符而非明文，占位符只可引用与比较、不能作为凭据值提交，确需明文（登录、填表、派生 token）时先调 bitwarden_reveal 取回。
+
 ## [0.10.4] — 2026-10-26
 
 日志擦除改为增量扫描。不再每轮重解全部会话日志，也不再占着主线程。
