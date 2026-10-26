@@ -4,6 +4,20 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-10-26
+
+擦除时同步 assistant/message 里的 tool-call 参数副本。此前擦完的会话无法再加载。
+
+### 修复
+
+- 宿主把一次工具调用的参数存了两份：`assistant/message` 的 `tool-call` 内容块，和独立的 `tool/call` 事件。加载时 `dsh-session-format-v3-to-v4` 逐字节比较二者，不等即抛 `SessionFormatError: tool/call <id> does not match one advertised tool call`，整条会话变成 "stored log is corrupt"，历史打不开。
+- sweeper 的 phase 2/3 只重写了 `tool/call` 那一份，于是每次擦除都在制造两份互相矛盾的副本。新增 phase 4：把 `tool/call` 的最终 arguments 写回 `assistant/message` 的对应 `tool-call` 块，二者由构造过程保证一致。
+- 改写 assistant 副本不影响回放：文件头警告的逐字节约束针对 `thinkingSignature`（模型厂商签名的兄弟字段），不针对 `arguments`。
+
+### 测试
+
+- sweeper.test.mjs 37→42：新增配对副本断言（擦除后两份逐字节相等、assistant 副本不再含明文、非敏感字段原样保留）。
+
 ## [0.10.2] — 2026-10-26
 
 sweeper 重写日志时的 zstd 分帧修复。会话不再因日志被判损坏而从工作区消失。

@@ -62,6 +62,15 @@ const sessionHeader = { type: 'session', version: 4, id: 's1', startedAt: 1 }
 const toolCall = (name, args) => ({ type: 'tool/call', seq: 2, time: 1, data: { turn: 1, step: 1, callId: 'c1', name, arguments: JSON.stringify(args) } })
 const toolResult = (text) => ({ type: 'tool/result', seq: 3, time: 1, data: { turn: 1, step: 1, message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text }] } } })
 const userMessage = (text) => ({ type: 'user/message', seq: 4, time: 1, data: { message: { role: 'user', content: [{ type: 'text', text }] } } })
+// The host stores a call's arguments TWICE — in the assistant message's
+// tool-call content block ("advertised") and in the tool/call event — and
+// requires byte equality on load (dsh-session-format-v3-to-v4 tool()).
+const assistantWithCall = (callId, name, args) => ({
+  type: 'assistant/message',
+  seq: 1,
+  time: 1,
+  data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'tool-call', id: callId, name, arguments: JSON.stringify(args) }] } },
+})
 
 const root = mkdtempSync(join(tmpdir(), 'bw-sweep-'))
 try {
@@ -112,6 +121,30 @@ try {
   check('session header line survives', after.includes('"type":"session"'))
   check('permissions are preserved across the rewrite', (statSync(idleLog).mode & 0o777) === 0o640)
 
+  // ── advertised-copy sync (the second corruption class) ─────────────────────
+  // The host replays both copies of a tool call and requires byte equality;
+  // a sweep that rewrites only tool/call leaves disagreeing copies and the
+  // whole session fails to load with "tool/call <id> does not match one
+  // advertised tool call". Build the exact shape and check both copies agree.
+  const pairedLog = makeSession(root, 'ddd', [
+    sessionHeader,
+    assistantWithCall('c9', 'bitwarden_get', { name: 'n', field: 'password', password: SECRET_PW }),
+    { type: 'tool/call', seq: 2, time: 1, data: { turn: 1, step: 1, callId: 'c9', name: 'bitwarden_get', arguments: JSON.stringify({ name: 'n', field: 'password', password: SECRET_PW }) } },
+  ])
+  const pairedResult = sweepLog(pairedLog, { skipIdleCheck: true })
+  check('paired log reports redacted', pairedResult.status === 'redacted', JSON.stringify(pairedResult))
+  const pairedEvents = zstdDecompress(readFileSync(pairedLog)).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  const advertised = pairedEvents.find((ev) => ev.type === 'assistant/message')?.data?.message?.content?.find((b) => b.type === 'tool-call')
+  const settled = pairedEvents.find((ev) => ev.type === 'tool/call')
+  check('advertised copy still exists after the sweep', !!advertised && !!settled)
+  check(
+    'the advertised copy and tool/call agree byte for byte (host load check)',
+    advertised?.name === settled?.data?.name && advertised?.arguments === settled?.data?.arguments,
+    'adv=' + JSON.stringify(advertised?.arguments) + ' call=' + JSON.stringify(settled?.data?.arguments),
+  )
+  check('the advertised copy no longer carries the plaintext', !String(advertised?.arguments ?? '').includes(SECRET_PW))
+  check('the advertised copy keeps its non-secret fields', String(advertised?.arguments ?? '').includes('"field":"password"'))
+
   // The host reads the header via readFirstZstdLine(): it decompresses ONLY the
   // first complete frame and requires exactly one line ending in a newline
   // (assertZstdHeaderFrame). A sweep that re-encodes the whole log as one frame
@@ -139,7 +172,7 @@ try {
 
   // ── sweepAll ───────────────────────────────────────────────────────────────
   const report = sweepAll(root)
-  check('sweepAll scans every log', report.scanned === 3, JSON.stringify(report))
+  check('sweepAll scans every log', report.scanned === 4, JSON.stringify(report))
   check('sweepAll reports the busy one', report.busy === 1)
   check('sweepAll with nothing left is all clean', report.redactedFiles === 0 && report.errors.length === 0)
 
