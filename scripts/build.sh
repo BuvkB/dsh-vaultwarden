@@ -155,6 +155,22 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== access mode tier test ==="
   node test/access-mode.test.mjs
 
+  # Placeholder masking: the model-facing half of the privacy contract. It sits
+  # in the build rather than in "remember to run it" because a break here is
+  # silent in the worst direction — the placeholder is still well formed, it
+  # just stops being stable or stops being derived from the value, and nothing
+  # downstream notices.
+  echo "=== placeholder mask test (stable tags, per-field salt, coverage) ==="
+  node test/mask.test.mjs
+
+  # Log sweep: the redaction contract for on-disk session logs, plus the two
+  # corruption classes a sweep must never reintroduce (a log written as one
+  # zstd frame loses its session; a rewritten tool/call with a stale
+  # assistant-message copy fails the host's replay check), plus the
+  # incrementality guarantees the sweep depends on to stay cheap.
+  echo "=== session log sweep test (redaction + frame layout + incrementality) ==="
+  node test/sweeper.test.mjs
+
   # Session resilience: a failed token refresh may only cost the stored session
   # when the *server* refused it. Offline, 429 and 5xx must keep it (and must
   # never drag a two-factor account to the code prompt).

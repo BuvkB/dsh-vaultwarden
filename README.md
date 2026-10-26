@@ -115,7 +115,7 @@ bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
 默认关闭。开启后分两层，各堵一个明文暴露面：
 
 - **模型侧（占位符脱敏，maskMode）**：`bitwarden_get` 不再返回明文，改返回与值一一对应的稳定占位符；确因任务需要明文时，`bitwarden_reveal` 按条目 + 字段单次取回。明文只在实际用到的那一刻进入模型上下文，其余时候上下文里只有推不回原值的占位符。
-- **磁盘侧（日志擦除，sweepMode）**：DSH 会把每次工具调用的参数与结果**原文写进硬盘**（`~/.dsh/sessions/` 下的会话日志）。擦除定时扫描这些日志，把其中 bitwarden 相关的明文替换为 `[REDACTED:BW]`，其他内容逐字节不动。
+- **磁盘侧（日志擦除，sweepMode）**：DSH 会把每次工具调用的参数与结果**原文写进硬盘**（`~/.dsh/sessions/` 下的会话日志）。擦除定时扫描这些日志，把其中 bitwarden 相关的明文替换为 `[REDACTED:BW]`，其他内容逐字节不动。扫描是**增量**的：只处理自上次擦除以来被写过的日志，重写时只重新压缩真正改动的帧，稳态下每轮是毫秒级。
 
 两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
 
@@ -140,7 +140,9 @@ DSH 会话日志（`~/.dsh/sessions/` 下的 `session.v*.jsonl.zstd`）会把工
 - 只动 bitwarden 工具的参数与结果（通过 callId 关联），其他工具的记录与用户消息逐字节不动。
 - 幂等：擦过的日志再扫一遍是空操作；重写保留文件权限与时间戳（时间戳是空闲判定依据，不能被重写重置）。
 - 进行中的会话跳过——擦除绝不与宿主写入并发。会话结束后下一次定时扫描会补上。
-- 独立进程调用系统 `zstd` 解压/重压缩，宿主未装 zstd 时报错跳过，不影响其他日志。
+- **增量**：每份日志记一条状态（大小、mtime、已收割到的字节偏移）。没变过的日志整轮跳过，不解压也不解析；变过的只看新追加的字节。zstd 日志是只追加写的、历史帧不可变，所以重写时**只重新压缩真正改动的帧**，其余帧按原字节拷贝。
+- 只读新增字节不会藏住回显：一个值的回声只可能出现在该值**出现之后**写下的字节里，所以「旧的字节已经看过」是真的看过。
+- **不霸占宿主**：解码优先用 Node 内置 zstd（走线程池，不占主线程），系统 `zstd` 只在旧 Node 上作为回落；一轮有时间预算，超预算就停下，剩下的由状态簿留给下一轮接着做。
 
 ### 残留风险（如实说明）
 
@@ -231,26 +233,27 @@ dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden
 ## 测试
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 十三套离线测试（共 761 项）
+bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 二十套离线测试（共 1283 项）
+# 另有两套依赖外部环境，缺失时自我跳过：test/native-row.test.mjs（宿主 primitives 路径）与 test/cli-interop.mjs（官方 bw CLI）
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
 | `test/peer-ranges.test.mjs`（34） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
-| `test/mock-e2e.test.mjs`（54） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 / 分区计数与分区读取 |
-| `test/mask.test.mjs`（29） | 占位符脱敏：标签稳定性 / 条目与字段加盐 / 幂等（已是占位符不再包一层）/ 字段覆盖面（password、TOTP 码、notes、自定义字段、卡号与安全码、SSH 私钥、密码历史、SSN；句柄类保留）/ mask.key 0600 与 32 字节 / 默认路径 |
-| `test/sweeper.test.mjs`（19） | 日志擦除：合成 session.v4.jsonl.zstd 上明文消失、占位符与非 bitwarden 行逐字节不动、callId 两阶段关联（结果行不含工具名也能擦）、幂等（标记不再被重擦）、busy 会话跳过、权限与时间戳保留、无锁导出副本视为空闲 |
+| `test/mock-e2e.test.mjs`（77） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 / 分区计数与分区读取 |
+| `test/mask.test.mjs`（37） | 占位符脱敏：标签稳定性 / 条目与字段加盐 / 幂等（已是占位符不再包一层）/ 字段覆盖面（password、TOTP 码、notes、自定义字段、卡号与安全码、SSH 私钥、密码历史、SSN；句柄类保留）/ mask.key 0600 与 32 字节 / 默认路径 |
+| `test/sweeper.test.mjs`（59） | 日志擦除：合成 session.v4.jsonl.zstd 上明文消失、占位符与非 bitwarden 行逐字节不动、callId 两阶段关联（结果行不含工具名也能擦）、幂等（标记不再被重擦）、busy 会话跳过、权限与时间戳保留、无锁导出副本视为空闲、PTC 与 code-dispatch 通道、裸目录与 v3 日志、跨日志与跨轮回显猎杀；**增量与分帧**：未变日志零解码零重写、未改动帧逐字节保留、状态簿字段、整轮预算用尽时把剩余工作留给下一轮、短收割一轮不重写任何文件、重写后首帧仍恰为一行 header、assistant 副本与 tool/call 逐字节一致 |
 | `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
-| `test/live-sync.test.mjs`（22） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
-| `test/mutations.test.mjs`（39） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |
-| `test/write-back.test.mjs`（48） | **P0/P1 回归**：软删端点与回收站可见性、**回收站条目排在合并列表最前**、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
+| `test/live-sync.test.mjs`（26） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
+| `test/mutations.test.mjs`（44） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |
+| `test/write-back.test.mjs`（49） | **P0/P1 回归**：软删端点与回收站可见性、**回收站条目排在合并列表最前**、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
 | `test/cache-store.test.mjs`（74） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件）+ **并发单飞**（四个并发冷读者只下载一次、单飞结束后清空、解锁途中登出不复活会话） |
 | `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
-| `test/host-entry.test.mjs`（28） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束、`vw/draft` 的参数名与面板字段一一对应）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
-| `test/gateway-flow.test.mjs`（90） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 / **读参数透传**（归档与回收站开关真正传到后端、回收站条目要 `includeTrashed` 才能读、分区参数 `section`/`sectionValue` 真正收窄池子、`vw/overview` 计数与分区池一致、`vw/folders` 返回解析后的对象）/ 写参数透传（归档、软删、恢复走通网关）/ **编辑器全链路**（`vw/draft` 整条明文、未知 id 报 `not_found`、`update` 只改点名字段且未点名字段原样留存、写后 `sync` 读回、并发改写以 `stale_revision` 拒绝、`create` 落库可见） |
+| `test/host-entry.test.mjs`（29） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束、`vw/draft` 的参数名与面板字段一一对应）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
+| `test/gateway-flow.test.mjs`（93） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 / **读参数透传**（归档与回收站开关真正传到后端、回收站条目要 `includeTrashed` 才能读、分区参数 `section`/`sectionValue` 真正收窄池子、`vw/overview` 计数与分区池一致、`vw/folders` 返回解析后的对象）/ 写参数透传（归档、软删、恢复走通网关）/ **编辑器全链路**（`vw/draft` 整条明文、未知 id 报 `not_found`、`update` 只改点名字段且未点名字段原样留存、写后 `sync` 读回、并发改写以 `stale_revision` 拒绝、`create` 落库可见） |
 | `test/access-mode.test.mjs`（17） | readonly / ask / auto 三档权限 |
-| `test/client-card.test.mjs`（320） | 条目面板 + **转录行逐类脱敏**（密码/TOTP/卡号与安全码/SSH 私钥/安全笔记正文/自定义字段值逐条 NEGATIVE CONTROL；`id`/`name`/`username`/持卡人姓名/指纹/字段名照常可读；**行上不得出现任何「已隐藏 / 脱敏」提示文案**）+ **编辑器进入 drill 态**（否则窄面板上表单开在列表之下、+ 按钮像坏的）+ **齿轮是一条闭合轮廓加中心毂**（不是辐条太阳）+ 窄面板工具栏不重叠 + **工具栏图标化**（新建/设置/刷新画成 16×16 线稿而非文字，各带 title 与 aria-label，一排在手机宽度不再换行、不再把计数挤成「共 4」）+ **层级分区导航**（侧栏分区行与计数、分组标题、`aria-current`、进入分区带 `section`/`sectionValue`、**切回命中快照零 RPC**、老宿主无 `vw/overview` 时只剩「全部条目」一行、**图标是画出来的 16×16 SVG 而非字体字符**、**计数药丸保留裸数字且当前行反色**）+ **服务端图标**（命中出 `<img>`、`none` 退回首字母圆枕、**探测答回来时那一行自己重绘**）+ **验证码分区行**（3+3 分组动态码、圆环、复制）+ **写操作**（归档/移入回收站/移动到文件夹与恢复的二次确认、`readonly` 档只读说明、回收站条目要 `includeTrashed`）+ **五类条目详情**（卡片掩码、身份字段、SSH 密钥、附件与密码历史折叠区）+ 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
-
+| `test/atomic-file.test.mjs`（20） | 落盘中间态的隐私契约：独占创建临时文件（已存在的宽权限文件永不复用）、权限随新 inode 一起生而非事后 chmod、临时名不可预测、失败不留残骸也不留半截记录 |
+| `test/client-card.test.mjs`（405） | 条目面板 + **转录行逐类脱敏**（密码/TOTP/卡号与安全码/SSH 私钥/安全笔记正文/自定义字段值逐条 NEGATIVE CONTROL；`id`/`name`/`username`/持卡人姓名/指纹/字段名照常可读；**行上不得出现任何「已隐藏 / 脱敏」提示文案**）+ **编辑器进入 drill 态**（否则窄面板上表单开在列表之下、+ 按钮像坏的）+ **齿轮是一条闭合轮廓加中心毂**（不是辐条太阳）+ 窄面板工具栏不重叠 + **工具栏图标化**（新建/设置/刷新画成 16×16 线稿而非文字，各带 title 与 aria-label，一排在手机宽度不再换行、不再把计数挤成「共 4」）+ **层级分区导航**（侧栏分区行与计数、分组标题、`aria-current`、进入分区带 `section`/`sectionValue`、**切回命中快照零 RPC**、老宿主无 `vw/overview` 时只剩「全部条目」一行、**图标是画出来的 16×16 SVG 而非字体字符**、**计数药丸保留裸数字且当前行反色**）+ **服务端图标**（命中出 `<img>`、`none` 退回首字母圆枕、**探测答回来时那一行自己重绘**）+ **验证码分区行**（3+3 分组动态码、圆环、复制）+ **写操作**（归档/移入回收站/移动到文件夹与恢复的二次确认、`readonly` 档只读说明、回收站条目要 `includeTrashed`）+ **五类条目详情**（卡片掩码、身份字段、SSH 密钥、附件与密码历史折叠区）+ 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
 | `test/native-row.test.mjs`（20） | **转录行的原生路径**：通过 `test/host-primitives-hooks.mjs` 加载宿主真实的 `@deepseek-ai/dsh-client-ui-primitives`，断言行渲染在宿主的 `DisclosureRow` 上（`data-disclosure-row` / `data-disclosure-header`）、标题前有官方图标、Enter 与整行点击都能展开、展开后仍无明文、且行上没有任何脱敏提示文案。`client-card` 跑在没有 primitives 的页面上，只覆盖无 primitives 的回退分支，这条补齐用户实际会走的那条 |
 
 另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。

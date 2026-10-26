@@ -73,6 +73,10 @@ const assistantWithCall = (callId, name, args) => ({
 })
 
 const root = mkdtempSync(join(tmpdir(), 'bw-sweep-'))
+// Keep the incremental state and the cross-round seed store inside the temp
+// root: their real locations live under DSH_HOME and must never be handed
+// fixture secrets by a test run.
+const OPTS = { statePath: join(root, 'sweep-state.json'), seedPath: join(root, 'swept-secrets.json') }
 try {
   const idleLog = makeSession(root, 'aaa', [
     sessionHeader,
@@ -100,7 +104,7 @@ try {
   }
 
   // ── single-log sweep ────────────────────────────────────────────────────────
-  const result = sweepLog(idleLog, { skipIdleCheck: false })
+  const result = await sweepLog(idleLog, { skipIdleCheck: false })
   check('idle log reports redacted', result.status === 'redacted' && result.redacted > 0, JSON.stringify(result))
   const raw = readFileSync(idleLog)
   const after = zstdDecompress(raw)
@@ -131,7 +135,7 @@ try {
     assistantWithCall('c9', 'bitwarden_get', { name: 'n', field: 'password', password: SECRET_PW }),
     { type: 'tool/call', seq: 2, time: 1, data: { turn: 1, step: 1, callId: 'c9', name: 'bitwarden_get', arguments: JSON.stringify({ name: 'n', field: 'password', password: SECRET_PW }) } },
   ])
-  const pairedResult = sweepLog(pairedLog, { skipIdleCheck: true })
+  const pairedResult = await sweepLog(pairedLog, { skipIdleCheck: true })
   check('paired log reports redacted', pairedResult.status === 'redacted', JSON.stringify(pairedResult))
   const pairedEvents = zstdDecompress(readFileSync(pairedLog)).split('\n').filter(Boolean).map((l) => JSON.parse(l))
   const advertised = pairedEvents.find((ev) => ev.type === 'assistant/message')?.data?.message?.content?.find((b) => b.type === 'tool-call')
@@ -163,22 +167,22 @@ try {
   }
 
   // idempotence: a second sweep finds nothing to do
-  const second = sweepLog(idleLog)
+  const second = await sweepLog(idleLog)
   check('second sweep is clean', second.status === 'clean', JSON.stringify(second))
 
   // busy log untouched
-  const busy = sweepLog(busyLog)
+  const busy = await sweepLog(busyLog)
   check('busy log is skipped', busy.status === 'busy', JSON.stringify(busy))
 
   // ── sweepAll ───────────────────────────────────────────────────────────────
-  const report = sweepAll(root)
+  const report = await sweepAll(root, OPTS)
   check('sweepAll scans every log', report.scanned === 4, JSON.stringify(report))
   check('sweepAll reports the busy one', report.busy === 1)
   check('sweepAll with nothing left is all clean', report.redactedFiles === 0 && report.errors.length === 0)
 
   // non-bitwarden log content is byte-identical after a sweep that touches it zero times
   const plainBefore = readFileSync(plainLog)
-  sweepLog(plainLog)
+  await sweepLog(plainLog)
   check('a bitwarden log without secrets is not rewritten', readFileSync(plainLog).equals(plainBefore))
 
   // ── code/PTC channel + discovery gaps (regressions fixed after audit) ────
@@ -195,12 +199,12 @@ try {
     ptcDispatchStart('bitwarden_create', { name: 'n2', password: SECRET_PW, notes: 'x'.repeat(30) }),
     ptcDispatch('bitwarden_get', { base: { id: 'e1', name: 'n' }, totp: { code: SECRET_TOTP, period: 30, remaining: 15 } }),
   ])
-  const ptc = sweepLog(ptcLog)
+  const ptc = await sweepLog(ptcLog)
   const ptcAfter = zstdDecompress(readFileSync(ptcLog))
   check('ptc-dispatch result plaintext is swept', ptc.status === 'redacted' && ptcAfter.includes('[REDACTED:BW]'), JSON.stringify(ptc))
   check('ptc-dispatch-start arguments are swept', !ptcAfter.includes(SECRET_PW))
   check('ptc totp code is swept', !ptcAfter.includes(SECRET_TOTP))
-  check('ptc sweep is idempotent', sweepLog(ptcLog).status === 'clean')
+  check('ptc sweep is idempotent', (await sweepLog(ptcLog)).status === 'clean')
 
   // a bare (non session-*) directory and a superseded v3 log are both found
   const bareDir = join(root, 'ws--x', 'plain-uuid-no-prefix')
@@ -212,7 +216,7 @@ try {
   const v3Log = join(dirname(idleLog), 'session.v3.jsonl.zstd')
   writeFileSync(v3Log, zstdCompress(JSON.stringify(ptcDispatch('bitwarden_reveal', { password: SECRET_PW })) + '\n'), { mode: 0o640 })
   utimesSync(v3Log, oldStamp, oldStamp)
-  sweepAll(root)
+  await sweepAll(root, OPTS)
   check('bare directory log is discovered and swept', !zstdDecompress(readFileSync(bareLog)).includes(SECRET_PW))
   check('superseded v3 log is discovered and swept', !zstdDecompress(readFileSync(v3Log)).includes(SECRET_PW))
 
@@ -222,7 +226,7 @@ try {
     toolCall('bitwarden_get', { name: 'n', field: 'password' }),
     toolResult(JSON.stringify({ password: SECRET_PW })),
   ])
-  sweepLog(shortLog)
+  await sweepLog(shortLog)
   check('short embedded JSON result is swept', !zstdDecompress(readFileSync(shortLog)).includes(SECRET_PW))
 
   // ── phase 3: echo hunting through non-bitwarden tool events ────────────
@@ -236,11 +240,11 @@ try {
     toolCall('run_code', { code: 'const x = 1' }),
     toolResult('aggregate: password is ' + SECRET_PW + ' per bitwarden_get'),
   ])
-  sweepLog(echoLog)
+  await sweepLog(echoLog)
   const echoAfter = zstdDecompress(readFileSync(echoLog))
   check('run_code aggregate echo of a harvested secret is swept', !echoAfter.includes(SECRET_PW), echoAfter.slice(0, 200))
   check('echo replacement uses the marker', echoAfter.includes('password is [REDACTED:BW]'))
-  check('echo sweep is idempotent', sweepLog(echoLog).status === 'clean')
+  check('echo sweep is idempotent', (await sweepLog(echoLog)).status === 'clean')
 
   // a log with no bitwarden events harvests nothing on its own, so a bare
   // per-log sweepLog does not hunt there; cross-log hunting is sweepAll's
@@ -250,7 +254,7 @@ try {
     toolCall('run_code', { code: 'const x = 1' }),
     toolResult('just text that happens to contain ' + SECRET_PW),
   ])
-  sweepLog(noBwLog)
+  await sweepLog(noBwLog)
   check('no bitwarden source means no value hunting', zstdDecompress(readFileSync(noBwLog)).includes(SECRET_PW))
 
   // ── cross-log echo: sweepAll seeds every hunt with the global harvest ──
@@ -267,10 +271,123 @@ try {
     toolCall('bash', { command: 'echo pw' }),
     toolResult('the password is ' + SECRET_PW + ' ok'),
   ])
-  const crossReport = sweepAll(root)
+  const crossReport = await sweepAll(root, OPTS)
   check('sweepAll hunts cross-log echoes', !zstdDecompress(readFileSync(dstLog)).includes(SECRET_PW))
   check('sweepAll reports harvested values', crossReport.harvested > 0, JSON.stringify(crossReport))
-  check('cross-log sweep is idempotent', sweepAll(root).redactedFiles === 0)
+  check('cross-log sweep is idempotent', (await sweepAll(root, OPTS)).redactedFiles === 0)
+
+  // ── incrementality: a settled log is not read again ────────────────────
+  // The whole point of the state book: a round must cost work proportional to
+  // what CHANGED, not to how much is stored. A second round over untouched
+  // logs decodes nothing and rewrites nothing.
+  const settledReport = await sweepAll(root, OPTS)
+  check('a settled round reports every idle log unchanged', settledReport.unchanged > 0, JSON.stringify(settledReport))
+  check('a settled round decodes no bytes at all', settledReport.bytes === 0, JSON.stringify(settledReport))
+  check('a settled round rewrites nothing', settledReport.redactedFiles === 0 && settledReport.normalised === 0)
+
+  // Only the frames that actually changed may be re-encoded: everything else
+  // is copied byte for byte, so an append-only log keeps its history intact.
+  const stableLog = makeSession(root, 'jjj', [
+    sessionHeader,
+    toolCall('bitwarden_get', { name: 'a', field: 'password' }),
+    toolResult('first result without secrets'),
+  ])
+  await sweepLog(stableLog, OPTS)
+  const firstBytes = readFileSync(stableLog)
+  const firstFrames = []
+  for (let i = firstBytes.indexOf(ZSTD_MAGIC); i !== -1; i = firstBytes.indexOf(ZSTD_MAGIC, i + 4)) firstFrames.push(i)
+  check('a swept multi-frame log really has several frames', firstFrames.length >= 2, 'frames=' + firstFrames.length)
+  // Appending a new batch the way the host does (a new frame, history untouched).
+  const appended = JSON.stringify(ptcDispatch('bitwarden_get', { base: { id: 'e2' }, password: SECRET_PW })) + '\n'
+  writeFileSync(stableLog, Buffer.concat([firstBytes, zstdCompress(appended)]))
+  const oldStamp2 = new Date(Date.now() - 3600 * 1000)
+  utimesSync(stableLog, oldStamp2, oldStamp2)
+  const appendedResult = await sweepLog(stableLog, OPTS)
+  const rebuiltBytes = readFileSync(stableLog)
+  check('an appended secret is found and swept', appendedResult.status === 'redacted' && !zstdDecompress(rebuiltBytes).includes(SECRET_PW), JSON.stringify(appendedResult))
+  check(
+    'every frame that did not need redaction kept its exact bytes',
+    rebuiltBytes.subarray(rebuiltBytes.indexOf(ZSTD_MAGIC, firstFrames[0] + 4)).indexOf(firstBytes.subarray(firstFrames[1])) !== -1,
+  )
+
+  // ── the state book ────────────────────────────────────────────────────
+  // sweepLog is the single-log entry point and deliberately does not touch the
+  // book; the book belongs to a round (sweepAll), so run one to settle it.
+  await sweepAll(root, OPTS)
+  const statePath = OPTS.statePath
+  check('the state book was written', existsSync(statePath))
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  check('the state book records every discovered log', Object.keys(state.files).length === listSessionLogs(root).length, String(Object.keys(state.files).length))
+  const entry = state.files[stableLog]
+  check('the state book records size, mtime and the harvested offset', !!entry && entry.swept === entry.size && entry.harvested === entry.size && typeof entry.mtimeMs === 'number', JSON.stringify(entry))
+  // A log is only settled against a union that was complete when it was swept.
+  // Without this flag an old state book would look settled forever.
+  check('a swept log is recorded as trusted', !!entry && entry.trusted === true, JSON.stringify(entry))
+
+  // ── the round reports whether work is left over ────────────────────────
+  // The periodic runner chains rounds until a round reports nothing pending:
+  // that is what turns the first run after an upgrade (empty state book, every
+  // log looks new) from a half-day trickle into a bounded catch-up. A settled
+  // store must report zero, or the chain never stops.
+  const settledPending = await sweepAll(root, OPTS)
+  check('a settled round reports no pending work', settledPending.pending === 0, JSON.stringify(settledPending))
+  // And a store that has never been seen must report pending work, or the
+  // chain would stop before catching up.
+  const freshDir = mkdtempSync(join(tmpdir(), 'bw-sweep-fresh-'))
+  try {
+    // Two logs on purpose: the budget is enforced BETWEEN logs, so a single
+    // log always completes. With two, the first one's decoded bytes make the
+    // budget exhausted and the second must be reported as left behind.
+    makeSession(freshDir, 'kkk', [sessionHeader, toolCall('bitwarden_find', { query: 'n' })])
+    makeSession(freshDir, 'mmm', [sessionHeader, toolCall('bitwarden_find', { query: 'n' })])
+    const trickle = await sweepAll(freshDir, {
+      statePath: join(freshDir, 'sweep-state.json'),
+      seedPath: join(freshDir, 'swept-secrets.json'),
+      // The byte budget, not the wall clock, must be what stops this
+      // round: a 1ms time budget expires between two reads on one machine
+      // and not on another, which makes the assertion itself flaky.
+      byteBudget: 1,
+      timeBudgetMs: 60_000,
+    })
+    check('a budget-exhausted round reports the work it left behind', trickle.pending === 1, JSON.stringify(trickle))
+
+    // A round whose harvest the budget cut short must rewrite NOTHING: a log
+    // rewritten against an incomplete union would keep a value's echo and,
+    // being unchanged afterwards, would never be looked at again.
+    const deferredLog = join(freshDir, 'ws--x', 'session-zzz', 'session.v4.jsonl.zstd')
+    makeSession(freshDir, 'zzz', [sessionHeader, toolCall('bitwarden_create', { password: SECRET_PW })])
+    const deferred = await sweepAll(freshDir, {
+      statePath: join(freshDir, 'sweep-state.json'),
+      seedPath: join(freshDir, 'swept-secrets.json'),
+      byteBudget: 1,
+      timeBudgetMs: 60_000,
+    })
+    check('a short harvest rewrites nothing at all', deferred.redactedFiles === 0 && deferred.normalised === 0 && deferred.pending > 0, JSON.stringify(deferred))
+    check('the deferred log still carries its plaintext', zstdDecompress(readFileSync(deferredLog)).includes(SECRET_PW))
+  } finally {
+    rmSync(freshDir, { recursive: true, force: true })
+  }
+
+  // ── a rewritten log still loads the way the host loads it ──────────────
+  // Beyond the frame-layout checks above: every event must survive the round
+  // trip, in order, with its type intact. A sweep that drops or reorders
+  // events passes a byte-level frame check and still destroys the session.
+  const roundTripLog = makeSession(root, 'lll', [
+    sessionHeader,
+    userMessage('please read my password'),
+    toolCall('bitwarden_get', { name: 'n', field: 'password' }),
+    toolResult(JSON.stringify({ password: SECRET_PW, username: 'alice' })),
+    userMessage('thanks'),
+  ])
+  const beforeEvents = zstdDecompress(readFileSync(roundTripLog)).split(String.fromCharCode(10)).filter(Boolean).map((l) => JSON.parse(l))
+  await sweepLog(roundTripLog, { skipIdleCheck: true })
+  const afterEventsAll = zstdDecompress(readFileSync(roundTripLog)).split(String.fromCharCode(10)).filter(Boolean).map((l) => JSON.parse(l))
+  check('a swept log keeps every event', afterEventsAll.length === beforeEvents.length, beforeEvents.length + ' -> ' + afterEventsAll.length)
+  check(
+    'a swept log keeps every event type in order',
+    afterEventsAll.every((ev, i) => ev.type === beforeEvents[i]?.type),
+  )
+  check('a swept log keeps the header first', afterEventsAll[0]?.type === 'session')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
