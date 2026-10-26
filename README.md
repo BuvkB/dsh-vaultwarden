@@ -1,6 +1,6 @@
 # dsh-vaultwarden — 让每个 DSH 会话实时同步 Vaultwarden 密码库
 
-把自建 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：任何新建会话（无论 workspace）都会自动知道"密码可以去 Bitwarden 里读"；服务器端任何增删改都会通过 WebSocket **实时**反映到本地，无需手动刷新。
+把自建 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：任何新建会话（无论 workspace）都会自动知道"密码可以去 Bitwarden 里读"；服务器端任何增删改都会通过 WebSocket **实时**反映到本地，无需手动刷新。密码默认不会以明文出现在会话里：开启**占位符脱敏**后模型读到的是可引用、可比较、推不回原值的占位符，需要时才按条目+字段单次取回；配合**日志擦除**，落盘会话日志中的 bitwarden 明文也会被定期替换为 `[REDACTED:BW]`。
 
 > **独立实现**：直接对接 Bitwarden/Vaultwarden 服务端 REST 与 SignalR 协议，不依赖 `bw` CLI，除可选的 `hash-wasm`（Argon2id KDF）外只用 Node 内置模块。
 > 设计过程中参考了两个 MIT 项目，详见文末[「参考与致谢」](#参考与致谢)。
