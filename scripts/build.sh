@@ -179,6 +179,18 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== masking trail index test (counts, dedup, incrementality, states) ==="
   node test/trail.test.mjs
 
+  # The reverse of the mask: given a placeholder, which entry was it hiding?
+  # Both failures are silent and both are privacy failures, so they sit in the
+  # build: a value with no key that still "resolves", and a reprompt-protected
+  # entry whose tag gets recomputed without the operator clearing the prompt.
+  echo "=== placeholder origin test (tag reverse-lookup, reprompt, key rotation) ==="
+  node test/unmask.test.mjs
+
+  # The gateway half of the same feature: which index the panel gets, and the
+  # rule that an unreadable vault costs the preview but never the row.
+  echo "=== placeholder origin gateway test (cache lifetime, silent misses) ==="
+  node test/trail-origin.test.mjs
+
   # Session resilience: a failed token refresh may only cost the stored session
   # when the *server* refused it. Offline, 429 and 5xx must keep it (and must
   # never drag a two-factor account to the code prompt).

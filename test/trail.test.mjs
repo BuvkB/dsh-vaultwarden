@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, statSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encodeFrame } from '../lib/zstd-log.js'
-import { INDEX_VERSION, TrailIndex, aggregateTrail, trailReport, resetTrailIndex, TRAIL_RANGES } from '../lib/trail.js'
+import { INDEX_VERSION, TrailIndex, aggregateTrail, trailRowDetail, trailReport, resetTrailIndex, TRAIL_RANGES } from '../lib/trail.js'
 
 let passed = 0
 let failed = 0
@@ -49,7 +49,7 @@ const dayOf = (ms) => {
 // ── fixtures: real event lines, compressed the way the host writes them ──────
 const titleLine = (time, title) => JSON.stringify({ type: 'session/title', seq: 5, time, data: { title } })
 const modelLine = (time, provider, model) => JSON.stringify({ type: 'model/selection', seq: 6, time, data: { provider, model } })
-const headerLine = (time) => JSON.stringify({ type: 'request/header', seq: 7, time, data: { header: { config: { provider: 'curi-gate', model: 'zcode/GLM-5.3' } } } })
+const headerLine = (time, provider = 'curi-gate', model = 'zcode/GLM-5.3') => JSON.stringify({ type: 'request/header', seq: 7, time, data: { header: { config: { provider, model } } } })
 const maskLine = (time, callId, kind, tag) =>
   JSON.stringify({
     type: 'tool/result',
@@ -60,6 +60,11 @@ const maskLine = (time, callId, kind, tag) =>
 const markerLine = (time, callId, context) =>
   JSON.stringify({ type: 'user/message', seq: 8, time, data: { callId, message: { role: 'user', content: [{ type: 'text', text: context + ' [REDACTED:BW_PASSWORD]' }] } } })
 const plainLine = (time) => JSON.stringify({ type: 'user/message', seq: 9, time, data: { message: { role: 'user', content: [{ type: 'text', text: 'no secrets in this one' }] } } })
+/** A tool call carrying a placeholder: the request side of the exchange. */
+const callLine = (time, callId, note) =>
+  JSON.stringify({ type: 'tool/call', seq: 4, time, data: { callId, message: { role: 'assistant', content: [{ type: 'toolCall', callId, name: 'web_fetch', arguments: { note } }] } } })
+/** A reply carrying the same placeholder back out: the "did it come back" side. */
+const replyLine = (time, text) => JSON.stringify({ type: 'assistant/message', seq: 5, time, data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } })
 
 const root = mkdtempSync(join(tmpdir(), 'bw-trail-'))
 const indexPath = join(root, 'trail-index.json')
@@ -100,7 +105,17 @@ const main = async () => {
   await writeLog('ws', 'session-beta', 3, betaLines, NOW - 900000)
 
   // gamma: ten days back — inside the 30-day window, outside the 7-day one.
-  await writeLog('ws', 'session-gamma', 4, [titleLine(NOW - 10 * DAY, '会话丙'), modelLine(NOW - 10 * DAY, 'stepfun', 'step-5-preview'), headerLine(NOW - 10 * DAY + 1000), maskLine(NOW - 10 * DAY + 2000, 'g1', 'CARD', 'efghijkl')], NOW - 10 * DAY)
+  await writeLog('ws', 'session-gamma', 4, [titleLine(NOW - 10 * DAY, '会话丙'), modelLine(NOW - 10 * DAY, 'stepfun', 'step-5-preview'), headerLine(NOW - 10 * DAY + 1000, 'stepfun', 'step-5-preview'), maskLine(NOW - 10 * DAY + 2000, 'g1', 'CARD', 'efghijkl')], NOW - 10 * DAY)
+
+  // delta: the reader picked one model and the request went out on another.
+  // The header is what the mask was sent inside, so the header wins — otherwise
+  // the ledger names a model that never saw the request.
+  await writeLog('ws', 'session-delta', 4, [
+    titleLine(NOW - 4 * DAY, '会话丁二'),
+    modelLine(NOW - 4 * DAY - 5000, 'curi-gate', 'zcode/GLM-5.3'),
+    headerLine(NOW - 4 * DAY, 'stepfun', 'step-5-preview'),
+    maskLine(NOW - 4 * DAY + 1000, 'd1', 'HISTORY', 'uvwxyzab'),
+  ], NOW - 4 * DAY)
 
   // stale: outside even the 30-day window. Its mtime is old, so the index must
   // not spend budget on it — and it must not appear in any total.
@@ -108,21 +123,26 @@ const main = async () => {
 
   const index = new TrailIndex({ sessionsRoot: join(root, 'sessions'), path: indexPath, now: () => NOW })
   const first = await index.refresh({ budgetMs: 60000 })
-  check('the cold scan reads every fresh session', first.scanned === 3, JSON.stringify(first))
+  check('the cold scan reads every fresh session', first.scanned === 4, JSON.stringify(first))
   check('the cold scan finishes inside its budget', first.pending === 0, JSON.stringify(first))
-  check('a stale session is not counted as pending work', first.total === 3, JSON.stringify(first))
+  check('a stale session is not counted as pending work', first.total === 4, JSON.stringify(first))
+
+  // v5 carries the fingerprints a row counted. Without them a ledger row
+  // is only a session name and a minute, and opening the detail page would
+  // have to re-derive which values were behind it from a log that may be gone.
+  check('the index version is the one that stores row fingerprints', INDEX_VERSION === 6, String(INDEX_VERSION))
 
   const state = index._load()
-  check('the index keeps one record per session directory', Object.keys(state.files).length === 3, JSON.stringify(Object.keys(state.files)))
+  check('the index keeps one record per session directory', Object.keys(state.files).length === 4, JSON.stringify(Object.keys(state.files)))
   // alpha contributes two (its repeat of the first mask adds nothing), beta two.
-  check('the repeated event line is counted once', aggregateTrail(state, { days: 7, now: NOW }).total === 4, JSON.stringify(aggregateTrail(state, { days: 7, now: NOW }).total))
+  check('the repeated event line is counted once', aggregateTrail(state, { days: 7, now: NOW }).total === 5, JSON.stringify(aggregateTrail(state, { days: 7, now: NOW }).total))
   check('a superseded log version is not counted beside its replacement', Object.values(state.files).every((record) => !record.log.includes('session.v3')), JSON.stringify(Object.values(state.files).map((record) => record.log)))
 
   // ── what the page shows ────────────────────────────────────────────────────
   const week = aggregateTrail(state, { days: 7, now: NOW })
-  check('the 7-day headline counts alpha and beta only', week.total === 4, String(week.total))
-  check('distinct values count the masks, not the events', week.distinct === 4, String(week.distinct))
-  check('requests count the frames that actually left', week.requests === 1, String(week.requests))
+  check('the 7-day headline counts alpha, beta and delta', week.total === 5, String(week.total))
+  check('distinct values count the masks, not the events', week.distinct === 5, String(week.distinct))
+  check('requests count the frames that actually left', week.requests === 2, String(week.requests))
   check('the axis has one point per day, oldest first', week.days.length === 7 && week.days[6].day === dayOf(NOW) && week.days[0].day === dayOf(NOW - 6 * DAY), JSON.stringify(week.days))
   check('today carries today', week.days[6].count === 4, JSON.stringify(week.days[6]))
   check('a middle day with no masks is a real zero', week.days[3].count === 0, JSON.stringify(week.days[3]))
@@ -130,6 +150,7 @@ const main = async () => {
   check('the session rail is ordered by count', week.sessions[0].count >= week.sessions[week.sessions.length - 1].count, JSON.stringify(week.sessions))
   check('the model rail splits provider from model at the first slash', week.models.some((row) => row.provider === 'curi-gate' && row.model === 'zcode/GLM-5.3' && row.count === 2), JSON.stringify(week.models))
   check('masks with no model selection get their own row', week.models.some((row) => row.provider === null && row.model === null && row.count === 2), JSON.stringify(week.models))
+  check('the model the request carried outranks the model picked in the UI', week.models.some((row) => row.provider === 'stepfun' && row.model === 'step-5-preview' && row.count === 1), JSON.stringify(week.models))
   check('the rails add up to the headline', week.models.reduce((sum, row) => sum + row.count, 0) === week.total, JSON.stringify(week.models))
   check('the ledger is newest first', week.rows.length > 1 && week.rows[0].time >= week.rows[1].time, JSON.stringify(week.rows.map((row) => row.time)))
   check('the ledger names the conversation and the model', week.rows.every((row) => row.session && typeof row.name === 'string'), JSON.stringify(week.rows))
@@ -165,9 +186,9 @@ const main = async () => {
   check('folding leaves the headline alone', clumped.rows.reduce((sum, row) => sum + row.count, 0) === clumped.total, JSON.stringify({ rows: clumped.rows, total: clumped.total }))
 
   const month = aggregateTrail(state, { days: 30, now: NOW })
-  check('the 30-day window adds the older session', month.total === 5, String(month.total))
+  check('the 30-day window adds the older session', month.total === 6, String(month.total))
   check('the 30-day window has 30 axis points', month.days.length === 30, String(month.days.length))
-  check('the 30-day window counts the older request too', month.requests === 2, String(month.requests))
+  check('the 30-day window counts the older request too', month.requests === 3, String(month.requests))
   check('the 30-day window shows the older model', month.models.some((row) => row.model === 'step-5-preview'), JSON.stringify(month.models))
   // The older session's day is not merely zero in the narrow window — it is not
   // on the axis at all, which is the difference between "none that day" and
@@ -179,7 +200,7 @@ const main = async () => {
   // ── no re-decoding on a warm refresh ──────────────────────────────────────
   const warm = await index.refresh({ budgetMs: 60000 })
   check('a warm refresh decodes nothing', warm.scanned === 0, JSON.stringify(warm))
-  check('a warm refresh keeps every record', Object.keys(index._load().files).length === 3, String(Object.keys(index._load().files).length))
+  check('a warm refresh keeps every record', Object.keys(index._load().files).length === 4, String(Object.keys(index._load().files).length))
 
   // ── appends are picked up, not recounted ──────────────────────────────────
   const alphaPath = join(root, 'sessions', 'ws', 'session-alpha', 'session.v4.jsonl.zstd')
@@ -190,8 +211,8 @@ const main = async () => {
   const grown = await index.refresh({ budgetMs: 60000 })
   check('an appended frame is read on the next refresh', grown.scanned === 1, JSON.stringify(grown))
   const afterAppend = aggregateTrail(index._load(), { days: 7, now: NOW })
-  check('the appended mask lands in the headline', afterAppend.total === 5, String(afterAppend.total))
-  check('the earlier masks are not recounted', afterAppend.distinct === 5, String(afterAppend.distinct))
+  check('the appended mask lands in the headline', afterAppend.total === 6, String(afterAppend.total))
+  check('the earlier masks are not recounted', afterAppend.distinct === 6, String(afterAppend.distinct))
 
   // ── a rewrite invalidates the offset ──────────────────────────────────────
   // The sweeper replaces a log wholesale (atomic rename: new inode, sometimes
@@ -206,7 +227,7 @@ const main = async () => {
   const rewritten = await index.refresh({ budgetMs: 60000 })
   check('a rewritten log is re-read from the start', rewritten.scanned === 1, JSON.stringify(rewritten))
   const afterRewrite = aggregateTrail(index._load(), { days: 7, now: NOW })
-  check('the rewrite replaces that session instead of adding to it', afterRewrite.total === 4, String(afterRewrite.total))
+  check('the rewrite replaces that session instead of adding to it', afterRewrite.total === 5, String(afterRewrite.total))
   check('the stale masks of the rewritten session are gone', afterRewrite.sessions.every((row) => row.name !== '会话乙' || row.count === 1), JSON.stringify(afterRewrite.sessions))
 
 
@@ -226,20 +247,20 @@ const main = async () => {
   const dedupRefresh = await index.refresh({ budgetMs: 60000 })
   check('a new session is read', dedupRefresh.scanned === 1, JSON.stringify(dedupRefresh))
   const dedup = aggregateTrail(index._load(), { days: 7, now: NOW })
-  check('an identical redaction in the same call counts once', dedup.total === 4 - 1 + 4, String(dedup.total))
-  check('distinct redactions in the same call count apart', dedup.distinct === 4 - 1 + 4, String(dedup.distinct))
+  check('an identical redaction in the same call counts once', dedup.total === week.total + 3, String(dedup.total))
+  check('distinct redactions in the same call count apart', dedup.distinct === week.total + 3, String(dedup.distinct))
 
   // ── a disappearing session is dropped ─────────────────────────────────────
   rmSync(join(root, 'sessions', 'ws', 'session-dedup'), { recursive: true, force: true })
   const pruned = await index.refresh({ budgetMs: 60000 })
   check('a deleted session stops being indexed', !Object.keys(index._load().files).some((key) => key.includes('session-dedup')), JSON.stringify(Object.keys(index._load().files)))
-  check('a deleted session leaves the totals', aggregateTrail(index._load(), { days: 7, now: NOW }).total === 4, String(aggregateTrail(index._load(), { days: 7, now: NOW }).total))
+  check('a deleted session leaves the totals', aggregateTrail(index._load(), { days: 7, now: NOW }).total === week.total, String(aggregateTrail(index._load(), { days: 7, now: NOW }).total))
 
   // ── persistence ───────────────────────────────────────────────────────────
   const saved = JSON.parse(readFileSync(indexPath, 'utf8'))
   check('the index is persisted with a version gate', saved.version === INDEX_VERSION, String(saved.version))
   check('the index is written private', (statSync(indexPath).mode & 0o777) === 0o600, (statSync(indexPath).mode & 0o777).toString(8))
-  check('the index stores one record per session directory', Object.keys(saved.files).length === 3, JSON.stringify(Object.keys(saved.files)))
+  check('the index stores one record per session directory', Object.keys(saved.files).length === 4, JSON.stringify(Object.keys(saved.files)))
   check('the index remembers the sweep cursor', Object.values(saved.files).every((record) => typeof record.offset === 'number' && record.offset > 0), JSON.stringify(Object.values(saved.files).map((record) => record.offset)))
 
   // ── a budget that runs out mid-scan says so ───────────────────────────────
@@ -252,7 +273,7 @@ const main = async () => {
   const slow = new TrailIndex({ sessionsRoot: slowRoot, path: join(root, 'slow-index.json'), now: ticking })
   const partial = await slow.refresh({ budgetMs: 1 })
   check('a spent budget leaves work pending', partial.pending > 0, JSON.stringify(partial))
-  check('the partial scan still reports the window size', partial.total === 3, JSON.stringify(partial))
+  check('the partial scan still reports the window size', partial.total === 4, JSON.stringify(partial))
   const partialReport = aggregateTrail(slow._load(), { days: 7, now: NOW })
   check('a partial index is marked in the report', partialReport.index.pending > 0, JSON.stringify(partialReport.index))
   check('a partial index still shows the numbers it has', partialReport.total >= 0, String(partialReport.total))
@@ -262,7 +283,7 @@ const main = async () => {
   const report = await trailReport({ sessionsRoot: slowRoot, path: join(root, 'rpc-index.json'), now: () => NOW, days: 30, budgetMs: 60000 })
   check('the RPC answers with the page shape', typeof report.total === 'number' && Array.isArray(report.days) && Array.isArray(report.sessions) && Array.isArray(report.models) && Array.isArray(report.rows), JSON.stringify(Object.keys(report)))
   check('the RPC honours the requested window', report.range === 30 && report.days.length === 30, JSON.stringify(report.range))
-  check('the RPC counts the whole window', report.total === 5, String(report.total))
+  check('the RPC counts the whole window', report.total === 6, String(report.total))
 
   const emptyRoot = join(root, 'no-sessions')
   const empty = await trailReport({ sessionsRoot: emptyRoot, path: join(root, 'empty-index.json'), now: () => NOW, days: 7, budgetMs: 60000 })
@@ -394,6 +415,157 @@ const main = async () => {
   const folded = aggregateTrail(foldState, { days: 7, now: NOW })
   check('the folded rows still add up to the headline', folded.rows.reduce((sum, row) => sum + row.count, 0) === folded.total, JSON.stringify({ rows: folded.rows, total: folded.total }))
   check('the folded headline counts every mask', folded.total === 31, String(folded.total))
+
+  // ── a row remembers what it counted ─────────────────────────────────────
+  // The ledger row is the only handle a reader has on a burst: a session name
+  // and a minute. Opening the detail page needs to know WHICH values were in
+  // it, so each row keeps their fingerprints — thirty copies of one tag are one
+  // entry with a count, not thirty entries.
+  const [curiRow, stepRow] = bunchRecord().rows.filter((row) => row.m === 'curi-gate/zcode/GLM-5.3' || row.m === 'stepfun/step-5-preview')
+  check('a row keeps the fingerprints it counted', curiRow?.v?.['PASSWORD:lmnopqrs'] === 30, JSON.stringify(curiRow))
+  check('the row\'s fingerprint counts agree with its size', Object.values(curiRow.v).reduce((sum, n) => sum + n, 0) === curiRow.n, JSON.stringify(curiRow))
+  check('the other model row keeps its own fingerprint', stepRow?.v?.['TOTP:nopqrstu'] === 1, JSON.stringify(stepRow))
+  check('a row with nothing counted keeps no fingerprint map', Object.values(foldState.files).every((record) => (record.rows ?? []).every((row) => row.n === 0 || Object.keys(row.v ?? {}).length > 0)), JSON.stringify(Object.values(foldState.files).flatMap((record) => record.rows)))
+
+  // ── the detail page ─────────────────────────────────────────────────────
+  // One burst, taken apart. The page can say which value sat where, what text
+  // surrounded it, and whether it came back out in the reply — and it can say
+  // nothing at all about the value itself, because the tag is an HMAC and the
+  // marker's context is a hash. What is asserted here is the honest limit, not
+  // a recovery.
+  const detailRoot = join(root, 'detail-sessions')
+  const detailIndexPath = join(root, 'detail-index.json')
+  await writeLog(
+    'ws',
+    'session-detail',
+    4,
+    [
+      titleLine(NOW - 90000, '会话详'),
+      modelLine(NOW - 89000, 'curi-gate', 'zcode/GLM-5.3'),
+      headerLine(NOW - 88000),
+      callLine(NOW - 60000, 'k1', 'the apiKey is {{BW_PASSWORD_aaaaaaaa}} and it is long'),
+      maskLine(NOW - 55000, 'k1', 'PASSWORD', 'aaaaaaaa'),
+      replyLine(NOW - 50000, 'the key came back as {{BW_PASSWORD_aaaaaaaa}} in the reply'),
+    ],
+    NOW - 10000,
+    'detail-sessions',
+  )
+  // A marker-only session: the sweeper left it, and it names no field.
+  await writeLog('ws', 'session-marker', 4, [titleLine(NOW - 95000, '会话擦'), markerLine(NOW - 45000, 'r1', 'the key is')], NOW - 11000, 'detail-sessions')
+  const detailIndex = new TrailIndex({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW })
+  await detailIndex.refresh({ budgetMs: 60000 })
+  const detailAgg = aggregateTrail(detailIndex._load(), { days: 7, now: NOW })
+  const detailRow = detailAgg.rows.find((row) => row.session === 'session-detail')
+  check('the detail corpus has a row to open', Boolean(detailRow), JSON.stringify(detailAgg.rows.map((row) => row.session)))
+  check('the same value in a call and its result counts once', detailRow.count === 2, JSON.stringify(detailRow))
+
+  resetTrailIndex()
+  const detail = await trailRowDetail({
+    sessionsRoot: detailRoot,
+    path: detailIndexPath,
+    now: () => NOW,
+    days: 7,
+    session: detailRow.session,
+    time: detailRow.time,
+  })
+  check('the detail page opens the row the ledger showed', detail.ok === true && detail.session === 'session-detail' && detail.time === detailRow.time, JSON.stringify({ ok: detail.ok, time: detail.time, row: detailRow.time }))
+  check('the detail page repeats the row\'s own numbers', detail.count === detailRow.count && detail.name === detailRow.name && detail.model === detailRow.model, JSON.stringify(detail))
+  check('the detail page lists the minutes the burst swallowed', detail.minutes.length === 1 && detail.minutes[0].count === 2, JSON.stringify(detail.minutes))
+  check('one value, however often it was counted', detail.values.length === 1, JSON.stringify(detail.values.map((value) => value.fingerprint)))
+  const one = detail.values[0]
+  check('the placeholder names its kind', one.kind === 'PASSWORD', one.kind)
+  check('the value is found in every part of the exchange', one.places.join(',') === 'toolCall,toolResult,reply', JSON.stringify(one.places))
+  check('the page says whether it came back out', one.reply === true, String(one.reply))
+  check('every occurrence is a spot with text around it', one.spots.length === 3 && one.spots.every((spot) => typeof spot.text === 'string' && spot.text.length > 0), JSON.stringify(one.spots.length))
+  // The ink is a slice of the log line, not a tokenisation: the part a reader
+  // wants is the key the value sat under, which a tokeniser would drop.
+  const replySpot = one.spots.find((spot) => spot.type === 'assistant/message')
+  check('the ink slice puts the needle back where it came from', replySpot.text.slice(replySpot.needleAt, replySpot.needleAt + replySpot.needle.length) === replySpot.needle, JSON.stringify(replySpot))
+  check('the ink keeps the words beside the value', replySpot.text.includes('the key came back as') && replySpot.text.includes('in the reply'), replySpot.text)
+  check('the ink window is bounded on both sides', replySpot.text.length <= 240 + replySpot.needle.length, String(replySpot.text.length))
+  check('the window is the minute the row names', detail.log.windowFrom === detailRow.time - (detailRow.time % 60000) && detail.log.windowTo === detail.log.windowFrom + 60000, JSON.stringify(detail.log))
+  check('a log that is there is not reported missing', detail.log.missing === false && detail.log.truncated === false, JSON.stringify(detail.log))
+
+  const markerAgg = aggregateTrail(detailIndex._load(), { days: 7, now: NOW })
+  const markerRow = markerAgg.rows.find((row) => row.session === 'session-marker')
+  const marker = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: markerRow.session, time: markerRow.time })
+  check('the marker row opens too', marker.ok === true, JSON.stringify(marker))
+  check('a marker names no kind, and the page says so rather than guessing', marker.values.every((value) => value.kind === null), JSON.stringify(marker.values.map((value) => value.kind)))
+  check('a marker still shows the text it was found in', marker.values[0]?.spots?.[0]?.text?.includes('the key is') === true, JSON.stringify(marker.values[0]?.spots?.[0]?.text))
+
+  // ── two values hidden in one sentence ───────────────────────────────────
+  // One log line can hide a password and a token at once. The page shows the
+  // line, not the values: two windows sliced around two masks in the same
+  // sentence covered almost the same characters three times over, and the page
+  // drew the same paragraph again for each. Both occurrences therefore carry the
+  // same slice, each with its own offset into it, and the slice spans the two
+  // masks rather than one of them twice.
+  const pairText = 'the apiKey is {{BW_PASSWORD_bbbbbbbb}} and the token is {{BW_TOTP_cccccccc}} for this request'
+  await writeLog(
+    'ws',
+    'session-pair',
+    4,
+    [titleLine(NOW - 80000, '会话双'), headerLine(NOW - 78000), callLine(NOW - 30000, 'p1', pairText)],
+    NOW - 9000,
+    'detail-sessions',
+  )
+  const pairIndex = new TrailIndex({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW })
+  await pairIndex.refresh({ budgetMs: 60000 })
+  const pairAgg = aggregateTrail(pairIndex._load(), { days: 7, now: NOW })
+  const pairRow = pairAgg.rows.find((row) => row.session === 'session-pair')
+  check('a line that hid two values counts both', pairRow.count === 2, JSON.stringify(pairRow))
+  const pair = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: pairRow.session, time: pairRow.time })
+  check('both values are listed', pair.values.length === 2, JSON.stringify(pair.values.map((value) => value.fingerprint)))
+  const pairSpots = pair.values.map((value) => value.spots[0])
+  check('each value points at the same sentence', pairSpots.every((spot) => spot.text === pairSpots[0].text), JSON.stringify(pairSpots.map((spot) => spot.text.length)))
+  check('the shared slice carries both values', pairSpots[0].text.includes('{{BW_PASSWORD_bbbbbbbb}}') && pairSpots[0].text.includes('{{BW_TOTP_cccccccc}}'), pairSpots[0].text)
+  check('and it is one sentence, not one per value', pairSpots[0].text.length <= 240 + '{{BW_PASSWORD_bbbbbbbb}}{{BW_TOTP_cccccccc}}'.length, String(pairSpots[0].text.length))
+  check('the two marks sit at different offsets', pairSpots[0].needleAt !== pairSpots[1].needleAt, JSON.stringify(pairSpots.map((spot) => spot.needleAt)))
+  check('each mark still reads back at its own offset', pairSpots.every((spot) => spot.text.slice(spot.needleAt, spot.needleAt + spot.needle.length) === spot.needle), JSON.stringify(pairSpots.map((spot) => spot.needle)))
+
+  // ── two values at opposite ends of one line ─────────────────────────────
+  // The other shape the same rule meets: a tool call whose arguments quote a
+  // whole file, with one mask near the start and one near the end. Sharing a
+  // window there is not a sentence shown once, it is two hundred lines of
+  // argument blob drawn to show two placeholders — so masks further apart than
+  // their windows are read as two sightings and the page draws two slices.
+  const farText = 'first {{BW_PASSWORD_dddddddd}}' + ' filler'.repeat(60) + ' last {{BW_TOTP_eeeeeeee}}'
+  await writeLog(
+    'ws',
+    'session-far',
+    4,
+    [titleLine(NOW - 80000, '会话远'), headerLine(NOW - 78000), callLine(NOW - 20000, 'f1', farText)],
+    NOW - 9000,
+    'detail-sessions',
+  )
+  const farIndex = new TrailIndex({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW })
+  await farIndex.refresh({ budgetMs: 60000 })
+  const farRow = aggregateTrail(farIndex._load(), { days: 7, now: NOW }).rows.find((row) => row.session === 'session-far')
+  const far = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: farRow.session, time: farRow.time })
+  const farSpots = far.values.map((value) => value.spots[0])
+  check('a line with two far-apart values still counts both', farRow.count === 2 && farSpots.length === 2, JSON.stringify({ count: farRow.count, spots: farSpots.length }))
+  check('the two sightings do not share a slice', farSpots[0].text !== farSpots[1].text, JSON.stringify(farSpots.map((spot) => spot.text.length)))
+  check('neither slice drags the whole line in', farSpots.every((spot) => spot.text.length <= 240 + spot.needle.length), JSON.stringify(farSpots.map((spot) => spot.text.length)))
+  check('each far-apart mark reads back at its own offset', farSpots.every((spot) => spot.text.slice(spot.needleAt, spot.needleAt + spot.needle.length) === spot.needle), JSON.stringify(farSpots.map((spot) => spot.needleAt)))
+
+  // ── a log that is no longer there ───────────────────────────────────────
+  // The index survives on a stale sibling: the newer log is gone, the older one
+  // is out of the scan window, so the record is neither re-read nor pruned and
+  // still holds the burst. The page then has the numbers and no text, and it
+  // must say so instead of throwing or inventing.
+  const detailDir = join(detailRoot, 'ws', 'session-detail')
+  rmSync(join(detailDir, 'session.v4.jsonl.zstd'), { force: true })
+  await writeLog('ws', 'session-detail', 3, [titleLine(NOW - 40 * DAY, '会话详')], NOW - 40 * DAY, 'detail-sessions')
+  const goneLog = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: detailRow.session, time: detailRow.time })
+  check('a deleted log degrades to the fingerprints, not an error', goneLog.ok === true && goneLog.log.missing === true, JSON.stringify(goneLog.log))
+  check('the numbers survive their log', goneLog.count === detailRow.count && goneLog.minutes.length === 1, JSON.stringify({ count: goneLog.count, minutes: goneLog.minutes }))
+  check('with no log there is no ink to show', goneLog.values.length === 0, JSON.stringify(goneLog.values))
+  const notFound = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: detailRow.session, time: NOW - 12345 })
+  check('a row that was never folded answers not-found', notFound.ok === false && notFound.reason === 'not-found', JSON.stringify(notFound))
+  const noSuch = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: 'session-nobody', time: detailRow.time })
+  check('a session that never existed answers not-found too', noSuch.ok === false && noSuch.reason === 'not-found', JSON.stringify(noSuch))
+  const emptyDetail = await trailRowDetail({ sessionsRoot: join(root, 'no-sessions'), path: join(root, 'empty-detail-index.json'), now: () => NOW, days: 7, session: 'session-detail', time: detailRow.time })
+  check('a machine with no logs has no row to open either', emptyDetail.ok === false && emptyDetail.reason === 'not-found', JSON.stringify(emptyDetail))
 }
 
 try {

@@ -3239,15 +3239,19 @@ async function main() {
     // A burst is one row with its own size, so the ledger has to say how many
     // masks it stands for — and say "1" rather than nothing, because a blank
     // cell reads as "unknown", not as one.
+    // A row is a button now — it opens the detail page — so the selector
+    // takes either element and reads the fourth cell of each.
     const countCells = () =>
       root()
         .findAll((node) => node.props?.['data-vw-ledger'] !== undefined)[0]
-        .findAll((node) => node.type === 'div')
+        .findAll((node) => node.type === 'div' || node.type === 'button')
         // Four cells, the last of which is the count — a row, not the card
         // itself (the card's fourth child is the foot, whose own children are
-        // elements and would stringify into a React fiber loop).
+        // elements and would stringify into a React fiber loop) and not the
+        // head, whose fourth cell is the column's name.
         .filter((node) => Array.isArray(node.props.children) && node.props.children.length === 4 && typeof node.props.children[3]?.props?.children === 'string')
         .map((node) => node.props.children[3].props.children)
+        .filter((cell) => cell !== '次数')
     check('the ledger says how many masks a row holds', countCells().includes('12') && countCells().includes('1'), JSON.stringify(countCells()))
     check('the ledger header names the count column', bodyText().includes('次数'))
 
@@ -3290,6 +3294,290 @@ async function main() {
     check('switching back keeps the container too', scrollArea() === container)
     check('switching back restores the search box', bodyText().includes('data-vw-search'))
     await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a ledger row opens a detail page ────────────────────────────────────
+  // A row says when, which conversation, which model, and how many. Opening
+  // one has to answer the question those four columns raise — which value,
+  // where it sat, whether it came back — without pretending to know the value
+  // itself, which the index never stored and the page must not invent.
+  {
+    const at = Date.parse('2026-10-26T14:15:00+08:00')
+    const older = Date.parse('2026-10-26T09:02:00+08:00')
+    const rows = [
+      { time: at, count: 12, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
+      { time: older, count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
+    ]
+    const detailRpc = makeRpc({
+      trail: () => ({
+        ok: true,
+        value: {
+          range: 7,
+          total: 1557,
+          distinct: 853,
+          requests: 281,
+          days: Array.from({ length: 7 }, (_, index) => ({ day: '2026-10-2' + index, count: index })),
+          sessions: [{ key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 }],
+          models: [{ provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 }],
+          rows,
+          ledger: { page: 1, pages: 1, size: 40, total: rows.length },
+          index: { pending: 0, total: 194, scannedAt: Date.now(), sessions: 194 },
+        },
+      }),
+      trailRow: (args) => ({
+        ok: true,
+        value: {
+          ok: true,
+          // The wire field is `sessionKey`, not `session`: a parameter named
+          // `session` is claimed by the host's session lookup and resolved
+          // against the live store, which a finished conversation's log would
+          // fail. The value travelling is a log filename, not a live handle.
+          session: args.sessionKey,
+          time: at,
+          name: '喜鹊服务配置与插件安装',
+          provider: 'curi-gate',
+          model: 'workbuddy/deepseek-v4.1-flash',
+          count: 12,
+          minutes: [{ time: at, count: 12, model: 'curi-gate/workbuddy/deepseek-v4.1-flash' }],
+          values: [
+            {
+              fingerprint: 'PASSWORD:7kzaipdf',
+              kind: 'PASSWORD',
+              count: 12,
+              // What the host adds when it can recompute the tag: which entry the
+              // placeholder stood in for, and the first characters of the value.
+              // The value itself never travels.
+              origin: { itemId: 'item-1', itemName: '生产环境 API', kind: 'PASSWORD', field: 'password', preview: 'Adm1••••••…' },
+              places: ['toolCall', 'toolResult', 'reply'],
+              reply: true,
+              firstAt: Date.parse('2026-10-26T14:14:40+08:00'),
+              spots: [
+                { type: 'tool/call', at: Date.parse('2026-10-26T14:14:40+08:00'), text: 'the apiKey is {{BW_PASSWORD_7kzaipdf}} and it is long', needle: '{{BW_PASSWORD_7kzaipdf}}', needleAt: 13 },
+                { type: 'tool/result', at: Date.parse('2026-10-26T14:14:50+08:00'), text: '{"password":"{{BW_PASSWORD_7kzaipdf}}"}', needle: '{{BW_PASSWORD_7kzaipdf}}', needleAt: 13 },
+                { type: 'assistant/message', at: Date.parse('2026-10-26T14:15:00+08:00'), text: 'the key came back as {{BW_PASSWORD_7kzaipdf}} in the reply', needle: '{{BW_PASSWORD_7kzaipdf}}', needleAt: 19 },
+              ],
+            },
+            {
+              fingerprint: 'M|9f3ab21c',
+              kind: null,
+              count: 1,
+              places: ['input'],
+              reply: false,
+              firstAt: Date.parse('2026-10-26T14:14:30+08:00'),
+              spots: [{ type: 'user/message', at: Date.parse('2026-10-26T14:14:30+08:00'), text: 'the key is [REDACTED:BW_PASSWORD]', needle: '[REDACTED:BW_PASSWORD]', needleAt: 11 }],
+            },
+          ],
+          log: { missing: false, truncated: false, windowFrom: at - (at % 60000), windowTo: at - (at % 60000) + 60000 },
+        },
+      }),
+    })
+    const panel = await mountPanel(mod, {}, detailRpc)
+    await flush()
+    const root = () => panel.renderer.root
+    const tab = () => root().findAll((node) => node.props?.role === 'tab')[1]
+    await act(async () => { tab().props.onClick() })
+    await flush(120)
+    const rowButtons = () => root().findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)
+    check('a ledger row is a control, not a label', rowButtons().length === 2 && rowButtons()[0].props.type === 'button', String(rowButtons().length))
+    check('a row says what opening it does', rowButtons()[0].props.title === '查看这条的详情', String(rowButtons()[0].props.title))
+    check('a row is reachable by keyboard', rowButtons()[0].props['data-vw-trail-row-open'] === 'aaa@' + at, String(rowButtons()[0].props['data-vw-trail-row-open']))
+
+    await act(async () => { rowButtons()[0].props.onClick() })
+    await flush(120)
+    const detail = () => root().findAll((node) => node.props?.['data-vw-trail-detail'] !== undefined)[0]
+    const bodyText = () => JSON.stringify(panel.renderer.toJSON())
+    check('the row opens a detail page in place of the ledger', Boolean(detail()) && rowButtons().length === 0, String(Boolean(detail())))
+    check('the detail page asks the host for the row it was given', detailRpc.calls.some((call) => call.method === 'trailRow' && call.args.sessionKey === 'aaa' && call.args.time === at && call.args.days === 7), JSON.stringify(detailRpc.calls.filter((call) => call.method === 'trailRow')))
+    check('the detail page says which row of the ledger it is', bodyText().includes('第 1/2 条'), '第 N/M 条')
+    // Five steps, in order, each naming one thing that happened.
+    const steps = () => detail().findAll((node) => node.props?.['data-vw-detail-step'] !== undefined)
+    check('the burst is told as five steps', steps().length === 5, String(steps().length))
+    check('the steps are numbered in order', steps().map((node) => node.props['data-vw-detail-step']).join(',') === '1,2,3,4,5', steps().map((node) => node.props['data-vw-detail-step']).join(','))
+    check('the first step names the minute the row showed', bodyText().includes('收到'), '')
+    check('the values and the places are two different numbers', bodyText().includes('发现 2 个值') && bodyText().includes('替换 12 处'), '')
+    check('the model step names the model the row named', bodyText().includes('发送模型') && bodyText().includes('workbuddy/deepseek-v4.1-flash'), '')
+    check('the last step says the value came back out', bodyText().includes('回复里又出现 1 处'), '')
+    // The left column is a reading order, oldest first, with the mask marked.
+    const ink = () => detail().findAll((node) => node.props?.['data-vw-detail-ink'] !== undefined)
+    check('every occurrence is shown with the text around it', ink().length === 4, String(ink().length))
+    const needles = () => detail().findAll((node) => node.props?.['data-vw-detail-needle'] !== undefined)
+    check('the mask itself is marked inside its text', needles().length === 4 && needles()[0].props.children === '[REDACTED:BW_PASSWORD]', JSON.stringify(needles().map((node) => node.props.children)))
+    // The left column is a reading order, so the marker the reader typed comes
+    // before the value that replaced it, and the reply comes last.
+    const inkPlaces = () => ink().map((node) => node.props.children[0].props.children[0].props.children)
+    check('the occurrences run oldest first', inkPlaces().join(',') === '输入,工具调用,工具结果,回复', JSON.stringify(inkPlaces()))
+    check('each occurrence says when it happened', ink().every((node) => /^\d\d-\d\d \d\d:\d\d$/.test(String(node.props.children[0].props.children[1].props.children))), JSON.stringify(ink().map((node) => node.props.children[0].props.children[1].props.children)))
+    // The right column describes each value from what the index holds.
+    const valueCards = () => detail().findAll((node) => node.props?.['data-vw-detail-value'] !== undefined)
+    check('each value gets its own description', valueCards().length === 2, String(valueCards().length))
+    // Three lines per value: what it was, the placeholder that stood in for it,
+    // and whether it came back. The card used to carry five labelled fields
+    // (kind, how it was found, where, reply, fingerprint) and read as a wall;
+    // how and where now live in the other column, and the fingerprint survives
+    // only as the tooltip, since it is the page's handle rather than something
+    // a reader can act on.
+    const cardLines = (node) => node.children.filter((child) => typeof child !== 'string')
+    const countIn = (node, prop) => node.findAll((child) => child.props?.[prop] !== undefined).length
+    check('each value card is three lines, not a field wall', valueCards().every((node) => cardLines(node).length === 3), JSON.stringify(valueCards().map((node) => cardLines(node).length)))
+    const kinds = () => detail().findAll((node) => node.props?.['data-vw-detail-kind'] !== undefined)
+    check('a value names its field in words', kinds()[0].props.children === '密码' && kinds()[1].props.children === '擦除标记', JSON.stringify(kinds().map((node) => node.props.children)))
+    check('the field is named once, with no label in front of it', !bodyText().includes('发现方式') && !bodyText().includes('查找方式'), '')
+    const codes = () => detail().findAll((node) => node.type === 'code')
+    check('the placeholder is shown as it stood in the text', codes()[0].props.children === '{{BW_PASSWORD_7kzaipdf}}' && codes()[1].props.children === '[REDACTED:BW_PASSWORD]', JSON.stringify(codes().map((node) => node.props.children)))
+    // The fingerprint is the page's handle for the value, not something a reader
+    // can use, so it lives in the tooltip and never in the text of the page.
+    const shownText = () => detail().findAll((node) => typeof node.props?.children === 'string').map((node) => node.props.children)
+    check('the fingerprint is the tooltip, not a line of its own', codes()[0].props.title === 'PASSWORD:7kzaipdf' && codes()[1].props.title === 'M|9f3ab21c' && !shownText().some((text) => text === 'PASSWORD:7kzaipdf' || text === 'M|9f3ab21c'), JSON.stringify(codes().map((node) => node.props.title)))
+    // 12 is how many spots the index counted for that value; the six windows
+    // kept in the log are a sample of them, not the number itself.
+    const counts = () => detail().findAll((node) => node.props?.['data-vw-detail-value-count'] !== undefined)
+    check('a repeated value says how many spots it filled', counts().length === 1 && counts()[0].props.children === '×12', JSON.stringify(counts().map((node) => node.props.children)))
+    const countsIn = (card) => card.findAll((node) => node.props?.['data-vw-detail-value-count'] !== undefined)
+    check('a value replaced once has no count to say', countsIn(valueCards()[1]).length === 0, String(countsIn(valueCards()[1]).length))
+    check('the description says whether it came back', bodyText().includes('出现了') && bodyText().includes('没出现'), '')
+    // A placeholder the vault can still match comes back with the entry it stood
+    // in for, so the card leads with the value's first characters and an arrow
+    // into the placeholder — the reader's question is "which password was this",
+    // and the entry name plus four characters answers it without printing it.
+    const origins = () => detail().findAll((node) => node.props?.['data-vw-detail-origin'] !== undefined)
+    check('a matchable placeholder shows the value it stood in for', origins().length === 1 && origins()[0].props.children === 'Adm1••••••…', JSON.stringify(origins().map((node) => node.props.children)))
+    const arrows = () => detail().findAll((node) => node.props?.['data-vw-detail-arrow'] !== undefined)
+    check('the value points at the placeholder it became', arrows().length === 1 && arrows()[0].props.children === '→', JSON.stringify(arrows().map((node) => node.props.children)))
+    const originNames = () => detail().findAll((node) => node.props?.['data-vw-detail-origin-name'] !== undefined)
+    check('the card also says which entry the value came from', originNames().length === 1 && originNames()[0].props.children === '生产环境 API', JSON.stringify(originNames().map((node) => node.props.children)))
+    check('the value and the placeholder share one line', (() => {
+      const row = detail().findAll((node) => node.props?.['data-vw-detail-code-row'] !== undefined)
+      return row.length === 1 && row[0].props.children.length === 3 && row[0].props.children[1].props.children === '→'
+    })())
+    // A marker has no salt to recompute, so its card keeps the bare placeholder
+    // and shows neither an arrow nor a preview — the miss has to look different
+    // from the hit, or the page would be claiming a match it did not make.
+    check('a marker gets no preview and no arrow', countIn(valueCards()[1], 'data-vw-detail-origin') === 0 && countIn(valueCards()[1], 'data-vw-detail-arrow') === 0)
+    check('the page states the limit out loud', bodyText().includes('条目删了、改过，或取的是验证码，就只剩占位符'), '')
+    check('the two columns are the request text and how it was masked', bodyText().includes('请求内容') && bodyText().includes('怎么遮的'), '')
+
+    // ── stepping, and coming back ──────────────────────────────────────────
+    const stepBtn = (key) => detail().findAll((node) => node.props?.['data-vw-detail-step-btn'] === key)[0]
+    check('the first row has no previous one', stepBtn('prev').props.disabled === true && stepBtn('next').props.disabled === false)
+    await act(async () => { stepBtn('next').props.onClick() })
+    await flush(120)
+    check('stepping asks the host for the next row', detailRpc.calls.some((call) => call.method === 'trailRow' && call.args.sessionKey === 'bbb'), JSON.stringify(detailRpc.calls.filter((call) => call.method === 'trailRow').map((call) => call.args.sessionKey)))
+    check('the crumb follows the step', bodyText().includes('第 2/2 条'), '第 N/M 条')
+    check('the last row has no next one', stepBtn('prev').props.disabled === false && stepBtn('next').props.disabled === true)
+    await act(async () => { detail().findAll((node) => node.props?.['data-vw-detail-back'] !== undefined)[0].props.onClick() })
+    await flush(120)
+    check('the back step returns to the ledger it came from', rowButtons().length === 2 && !bodyText().includes('第 1/2 条'), String(rowButtons().length))
+
+    // ── a row whose log is gone ────────────────────────────────────────────
+    // The index still holds the burst, so the numbers are real; only the text
+    // is missing. The page says which of the two it is, rather than showing an
+    // empty column that reads as "there was nothing".
+    const goneRpc = makeRpc({
+      trail: () => ({
+        ok: true,
+        value: {
+          range: 7,
+          total: 1,
+          distinct: 1,
+          requests: 1,
+          days: Array.from({ length: 7 }, () => ({ day: '2026-10-26', count: 1 })),
+          sessions: [{ key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 1 }],
+          models: [{ provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 1 }],
+          rows: [rows[0]],
+          ledger: { page: 1, pages: 1, size: 40, total: 1 },
+          index: { pending: 0, total: 1, scannedAt: Date.now(), sessions: 1 },
+        },
+      }),
+      trailRow: () => ({
+        ok: true,
+        value: {
+          ok: true,
+          session: 'aaa',
+          time: at,
+          name: '喜鹊服务配置与插件安装',
+          provider: 'curi-gate',
+          model: 'workbuddy/deepseek-v4.1-flash',
+          count: 12,
+          minutes: [{ time: at, count: 12, model: 'curi-gate/workbuddy/deepseek-v4.1-flash' }],
+          values: [],
+          log: { missing: true, truncated: false, windowFrom: at, windowTo: at + 60000 },
+        },
+      }),
+    })
+    const gonePanel = await mountPanel(mod, {}, goneRpc)
+    await flush()
+    await act(async () => { gonePanel.renderer.root.findAll((node) => node.props?.role === 'tab')[1].props.onClick() })
+    await flush(120)
+    await act(async () => { gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0].props.onClick() })
+    await flush(120)
+    const goneText = () => JSON.stringify(gonePanel.renderer.toJSON())
+    check('a row with no log still shows its numbers', goneText().includes('替换 12 处') && goneText().includes('发现 0 个值'), '')
+    check('a missing log is said, not shown as an empty column', goneText().includes('对应的会话日志已经不在了，只剩下指纹'), '')
+    check('an empty value column is said too', goneText().includes('没有可显示的值'), '')
+    check('the row still steps back to the ledger', gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined).length === 0, '')
+    await act(async () => { gonePanel.renderer.unmount() })
+  }
+
+  // ── two values hidden in one sentence ─────────────────────────────────────
+  // The host slices one window per log line, so two values hidden in the same
+  // sentence arrive as two occurrences carrying the same text at two offsets.
+  // Drawn per value the page shows the sentence twice; drawn per window it
+  // shows it once with both marks in place, which is how the line read.
+  {
+    const at = Date.parse('2026-10-26T14:15:00+08:00')
+    const pairText = 'the apiKey is {{BW_PASSWORD_bbbbbbbb}} and the token is {{BW_TOTP_cccccccc}} for this request'
+    const spotAt = (needle) => ({ type: 'tool/call', at, text: pairText, needle, needleAt: pairText.indexOf(needle) })
+    const pairRpc = makeRpc({
+      trail: () => ({
+        ok: true,
+        value: {
+          range: 7,
+          total: 2,
+          distinct: 2,
+          requests: 1,
+          days: Array.from({ length: 7 }, () => ({ day: '2026-10-26', count: 0 })),
+          sessions: [{ key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 2 }],
+          models: [],
+          rows: [{ time: at, count: 2, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' }],
+          ledger: { page: 1, pages: 1, size: 40, total: 1 },
+          index: { pending: 0, total: 1, scannedAt: Date.now(), sessions: 1 },
+        },
+      }),
+      trailRow: () => ({
+        ok: true,
+        value: {
+          ok: true,
+          session: 'aaa',
+          time: at,
+          name: '喜鹊服务配置与插件安装',
+          provider: 'curi-gate',
+          model: 'workbuddy/deepseek-v4.1-flash',
+          count: 2,
+          minutes: [{ time: at, count: 2, model: 'curi-gate/workbuddy/deepseek-v4.1-flash' }],
+          values: [
+            { fingerprint: 'PASSWORD:bbbbbbbb', kind: 'PASSWORD', places: ['toolCall'], reply: false, firstAt: at, spots: [spotAt('{{BW_PASSWORD_bbbbbbbb}}')] },
+            { fingerprint: 'TOTP:cccccccc', kind: 'TOTP', places: ['toolCall'], reply: false, firstAt: at, spots: [spotAt('{{BW_TOTP_cccccccc}}')] },
+          ],
+          log: { missing: false, truncated: false, windowFrom: at - (at % 60000), windowTo: at - (at % 60000) + 60000 },
+        },
+      }),
+    })
+    const pairPanel = await mountPanel(mod, {}, pairRpc)
+    await flush()
+    await act(async () => { pairPanel.renderer.root.findAll((node) => node.props?.role === 'tab')[1].props.onClick() })
+    await flush(120)
+    await act(async () => { pairPanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0].props.onClick() })
+    await flush(120)
+    const pairRoot = () => pairPanel.renderer.root
+    const pairInk = () => pairRoot().findAll((node) => node.props?.['data-vw-detail-ink'] !== undefined)
+    const pairNeedles = () => pairRoot().findAll((node) => node.props?.['data-vw-detail-needle'] !== undefined)
+    check('one sentence is drawn once, however many values it hid', pairInk().length === 1, String(pairInk().length))
+    check('both marks are marked inside it', pairNeedles().map((node) => node.props.children).join('|') === '{{BW_PASSWORD_bbbbbbbb}}|{{BW_TOTP_cccccccc}}', JSON.stringify(pairNeedles().map((node) => node.props.children)))
+    const runs = () => pairRoot().findAll((node) => node.props?.['data-vw-detail-ink-text'] !== undefined)[0].props.children
+    check('the sentence is not repeated between the marks', runs().length === 5, String(runs().length))
+    check('the marks sit in the order the line had them', runs()[0] === 'the apiKey is ' && runs()[2] === ' and the token is ' && runs()[4] === ' for this request', JSON.stringify(runs()[0]) + ' / ' + JSON.stringify(runs()[2]))
+    check('both values still get their own description', pairRoot().findAll((node) => node.props?.['data-vw-detail-value'] !== undefined).length === 2, '')
+    await act(async () => { pairPanel.renderer.unmount() })
   }
 
   // ── the trail page's three states outside 'ready' ─────────────────────────
