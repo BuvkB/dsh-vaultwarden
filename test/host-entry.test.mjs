@@ -126,7 +126,7 @@ async function main() {
     const fields = schema?.dict ?? {}
     return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
   })())
-  check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /凭据库/.test(section.text) && section.text.length <= 400))
+  check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /密码库/.test(section.text) && section.text.length <= 400))
   // Regression: the mask guidance quotes a literal `{{BW_<类型>_<标签>}}`. The host
   // interpolates every section by default and throws `malformed prompt variable
   // reference` on any `{{…}}` that is not `^[a-z][a-z0-9_]*$`, which aborted the
@@ -155,7 +155,7 @@ async function main() {
   const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol')
   const { VaultGateway } = await import('../lib/gateway.js')
   const markers = remoteMethods(Object.create(VaultGateway.prototype)).map((marker) => marker.exportName ?? marker.method)
-  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge', 'boot', 'restore', 'folders', 'overview', 'draft'].every((name) => markers.includes(name)), markers.join(','))
+  check('gateway exposes the vw methods incl. setup + 2FA', ['status', 'list', 'reveal', 'totp', 'sync', 'create', 'update', 'remove', 'config', 'configure', 'connect', 'twoFactor', 'submitTwoFactor', 'reset', 'session', 'discardChallenge', 'boot', 'restore', 'folders', 'overview', 'draft', 'trail'].every((name) => markers.includes(name)), markers.join(','))
   check('every Remote method has a source-mode-safe signature', (() => {
     // The gateway's SRC mode parses the parameter list as plain identifiers:
     // defaults, destructuring and rest are rejected at call time.

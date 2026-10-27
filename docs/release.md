@@ -18,7 +18,7 @@
 ```sh
 cd /home/tinyog/dsh/dsh-vaultwarden
 
-# 1. 门禁（二十套离线测试，共 1283 项；native-row 与 cli-interop 视环境自跳过）
+# 1. 门禁（二十一套离线测试，共 1416 项；native-row 与 cli-interop 视环境自跳过）
 bash scripts/build.sh
 
 # 2. 版本号与 CHANGELOG 改好后提交、推 main
@@ -60,7 +60,7 @@ gh release create v0.8.2 \
 1. 从 `https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz` 下载，核对 sha256 与本地一致；同时核对 GitHub 记录的 digest。
 2. 解包，检查修复标记齐全（每次发版按当版改动的关键字查）、`package/package.json` 版本号正确、`node --check` 全部 lib 文件通过。
 3. 对比发布产物与源码：`lib/client.js`、`CHANGELOG.md` 应逐字节一致。
-4. 真机端到端：打开 GUI 设置 → 凭据库，确认面板打开、数据渲染、无 pageerror、无管理/调试接口调用。
+4. 真机端到端：打开 GUI 设置 → 密码库，确认面板打开、数据渲染、无 pageerror、无管理/调试接口调用。
 
 ## 陷阱
 

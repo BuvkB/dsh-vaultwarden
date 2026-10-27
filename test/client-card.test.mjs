@@ -457,7 +457,7 @@ async function main() {
       labelRenderer = create(registration.options.label())
     })
     const labelJson = JSON.stringify(labelRenderer.toJSON())
-    check('panel label comes from the dictionary', labelJson.includes('凭据库'), labelJson.slice(0, 120))
+    check('panel label comes from the dictionary', labelJson.includes('密码库'), labelJson.slice(0, 120))
     // The label carries the plugin's badge — the same mark the panel heading
     // leads with. Asserting the contract, not a path string: a redesign must
     // not fail this for the wrong reason.
@@ -518,12 +518,12 @@ async function main() {
   // input tooltip.
   {
     const headerText = JSON.stringify(renderer.toJSON())
-    // The heading is three parts now: a 凭据库 badge, the package name, then
+    // The heading is three parts now: a 密码库 badge, the package name, then
     // the build identity. The badge shares the panel's Badge system, so it is
     // the same 19px pill the list uses for a TOTP mark.
     check(
-      'the heading opens with a 凭据库 badge',
-      headerText.includes('"data-vw-badge"' ) && headerText.includes('凭据库'),
+      'the heading opens with a 密码库 badge',
+      headerText.includes('"data-vw-badge"' ) && headerText.includes('密码库'),
       headerText.slice(0, 260),
     )
     check('the heading names the package itself', headerText.includes('dsh-vaultwarden'), headerText.slice(0, 260))
@@ -1393,7 +1393,7 @@ async function main() {
   // The panel chooses the setup form from the configuration state (not from an
   // error code, which does not survive the RPC boundary).
   const unconfiguredConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
-  const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
+  const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '密码库尚未配置完整' } }
   const setupRpc = makeRpc({ boot: () => bootWith(unconfiguredConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
   const unconfigured = await mountPanel(mod, {}, setupRpc)
   const setupText = JSON.stringify(unconfigured.renderer.toJSON())
@@ -1915,7 +1915,7 @@ async function main() {
     const nRows = () => panel.renderer.root.findAll((node) => node.props?.role === 'option')
     const nText = () => JSON.stringify(panel.renderer.toJSON())
 
-    check('the sidebar is a landmark, not a list', nodeWith('data-vw-nav').length === 1 && nodeWith('data-vw-nav')[0].props['aria-label'] === '凭据库分区')
+    check('the sidebar is a landmark, not a list', nodeWith('data-vw-nav').length === 1 && nodeWith('data-vw-nav')[0].props['aria-label'] === '密码库分区')
     check(
       'the sidebar offers every place the host counted',
       navKeys().join(',') === 'all,favorites,totp,type:login,type:secureNote,folder:folder-work,unfiled,archive,trash',
@@ -2220,7 +2220,7 @@ async function main() {
     // misalignment showed: the API-key setup form carries two extra fields and
     // is the one tall enough to exceed the budget.
     const apiConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
-    const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '凭据库尚未配置完整' } }
+    const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '密码库尚未配置完整' } }
     const setupRpc = makeRpc({ boot: () => bootWith(apiConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
     const setup = await mountPanel(mod, {}, setupRpc)
     const setupCard = setup.renderer.root.findAll((node) => node.props?.style?.minHeight === 200)[0]
@@ -3168,6 +3168,199 @@ async function main() {
     check('reopening does not re-ask the host for a session', bootsOnReopen === 0, 'boot calls on reopen: ' + String(bootsOnReopen))
     await act(async () => { second.renderer.unmount() })
     mod.__resetOpenCache()
+  }
+
+  // ── the second page: passwords, then the masking trail ───────────────────
+  // The strip is the host's own tab pattern, and the two pages are ONE
+  // surface: switching must not remount the scroll container (a reader's
+  // position is the reason that container is stable), must not leave the
+  // list's rail or its search box behind on a page that has neither, and
+  // must reach the host for the trail's numbers rather than inventing
+  // them locally.
+  {
+    const trailRpc = makeRpc({
+      trail: (args) => ({
+        ok: true,
+        value: {
+          range: args.days,
+          total: 1557,
+          distinct: 853,
+          requests: 281,
+          days: Array.from({ length: args.days }, (_, index) => ({ day: `2026-10-${String(index + 1).padStart(2, '0')}`, count: index })),
+          sessions: [{ key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 }],
+          models: [{ provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 }, { provider: null, model: null, count: 7 }],
+          rows: [
+            { time: Date.parse('2026-10-26T14:15:00+08:00'), count: 12, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
+            { time: Date.parse('2026-10-26T09:02:00+08:00'), count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
+          ],
+          // Three pages of bursts, the first one asked for. The page the host
+          // answers with is the page the pager shows: it clamps the number, so
+          // the client never formats a page it did not receive.
+          ledger: { page: Number(args.page) === 2 ? 2 : 1, pages: 3, size: 40, total: 96 },
+          index: { pending: 0, total: 194, scannedAt: Date.now(), sessions: 194 },
+        },
+      }),
+    })
+    const panel = await mountPanel(mod, {}, trailRpc)
+    await flush()
+    const root = () => panel.renderer.root
+    const tabList = () => root().findAll((node) => node.props?.role === 'tablist')[0]
+    const tabs = () => root().findAll((node) => node.props?.role === 'tab')
+    const scrollArea = () => root().findAll((node) => node.props?.['data-scroll-area'] === '')[0]
+    const bodyText = () => JSON.stringify(panel.renderer.toJSON())
+    check('the panel offers two tabs', Boolean(tabList()) && tabs().length === 2, String(tabs().length))
+    check('the tabs are the password list and the trail', tabs()[1].props.children.includes('脱敏轨迹'), JSON.stringify(tabs().map((node) => node.props.children)))
+    check('the password list is the tab that opens', tabs()[0].props['aria-selected'] === true && tabs()[1].props['aria-selected'] === false)
+    check("the tab strip names itself for a screen reader", tabList().props["aria-label"] === "密码库视图", String(tabList().props["aria-label"]))
+    check('both tabs control the one surface', tabs()[0].props['aria-controls'] === tabs()[1].props['aria-controls'])
+    check('the trail is not read while the list is open', trailRpc.calls.every((call) => call.method !== 'trail'))
+    const container = scrollArea()
+    check('the list page has the search box and the rail', bodyText().includes('data-vw-search') && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 1)
+
+    await act(async () => { tabs()[1].props.onClick() })
+    await flush(120)
+    check('the trail tab is now the selected one', tabs()[1].props['aria-selected'] === true && tabs()[1].props['data-active'] === 'true')
+    check('switching pages keeps the scroll container mounted', scrollArea() === container, 'container remounted across the tab switch')
+    check('the trail page asks the host for its numbers', trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 7))
+    const trail = () => root().findAll((node) => node.props && Object.prototype.hasOwnProperty.call(node.props, 'data-vw-trail'))[0]
+    check('the trail page is on screen', Boolean(trail()))
+    check('the trail page carries the headline the host answered', trail().findAll((node) => node.props?.['data-vw-trail-count'] !== undefined)[0].props.children === '1,557')
+    check("the trail page drops the search box and the rail", !bodyText().includes("data-vw-search") && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 0)
+    check('the trail page names the conversations that asked', bodyText().includes('喜鹊服务配置与插件安装'))
+    // Provider and model are two lines in one cell, not one joined string: the
+    // joined form is forty characters and got cut inside the model's name.
+    const railModels = () =>
+      root().findAll((node) => node.props?.['data-vw-trail-rail'] === 'models')[0].findAll((node) => node.type === 'div')
+    check('the trail page splits the model rail at the provider', bodyText().includes('curi-gate') && bodyText().includes('workbuddy/deepseek-v4.1-flash'))
+    check('the model rail keeps the provider above the model', railModels().length > 0 && JSON.stringify(railModels()[0].props.children.length) === '2')
+    check('a mask with no model is not dropped from the rail', bodyText().includes('未记录模型'))
+    const mask = (time) => `${String(new Date(time).getMonth() + 1).padStart(2, '0')}-${String(new Date(time).getDate()).padStart(2, '0')} ${String(new Date(time).getHours()).padStart(2, '0')}:${String(new Date(time).getMinutes()).padStart(2, '0')}`
+    check('the ledger names the minute a mask happened', bodyText().includes(mask(Date.parse('2026-10-26T14:15:00+08:00'))), mask(Date.parse('2026-10-26T14:15:00+08:00')))
+    // A burst is one row with its own size, so the ledger has to say how many
+    // masks it stands for — and say "1" rather than nothing, because a blank
+    // cell reads as "unknown", not as one.
+    const countCells = () =>
+      root()
+        .findAll((node) => node.props?.['data-vw-ledger'] !== undefined)[0]
+        .findAll((node) => node.type === 'div')
+        // Four cells, the last of which is the count — a row, not the card
+        // itself (the card's fourth child is the foot, whose own children are
+        // elements and would stringify into a React fiber loop).
+        .filter((node) => Array.isArray(node.props.children) && node.props.children.length === 4 && typeof node.props.children[3]?.props?.children === 'string')
+        .map((node) => node.props.children[3].props.children)
+    check('the ledger says how many masks a row holds', countCells().includes('12') && countCells().includes('1'), JSON.stringify(countCells()))
+    check('the ledger header names the count column', bodyText().includes('次数'))
+
+    // ── the ledger's pager ──────────────────────────────────────────────────
+    // Forty rows is more than one screen: a table that just stops looks
+    // finished, and the reader cannot tell a quiet week from page one of four.
+    // The foot states the whole length and offers the rest.
+    const pagerButtons = () => root().findAll((node) => node.props?.['data-vw-pager-btn'] !== undefined)
+    const pagerButton = (key) => pagerButtons().filter((node) => node.props['data-vw-pager-btn'] === key)[0]
+    check('the ledger foot says how long the whole window is', bodyText().includes('共 96 条'), String(pagerButtons().length))
+    check('the ledger offers every page', pagerButtons().filter((node) => /^[0-9]+$/.test(node.props['data-vw-pager-btn'])).map((node) => node.props['data-vw-pager-btn']).join(',') === '1,2,3', JSON.stringify(pagerButtons().map((node) => node.props['data-vw-pager-btn'])))
+    check('the open page is the one the host answered', pagerButton('1').props['data-active'] === 'true' && pagerButton('1').props['aria-current'] === 'page' && pagerButton('2').props['data-active'] === undefined)
+    check('there is no previous page from the first one', pagerButton('prev').props.disabled === true && pagerButton('next').props.disabled === false)
+    await act(async () => { pagerButton('2').props.onClick() })
+    await flush(120)
+    check('turning the page asks the host for that page', trailRpc.calls.some((call) => call.method === 'trail' && call.args.page === 2), JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').map((call) => call.args)))
+    check('turning the page keeps the window', trailRpc.calls.some((call) => call.method === 'trail' && call.args.page === 2 && call.args.days === 7))
+    check('the pager follows the host, not its own counter', pagerButton('2').props['data-active'] === 'true' && pagerButton('2').props['aria-current'] === 'page')
+    check('a middle page has both steps', pagerButton('prev').props.disabled === false && pagerButton('next').props.disabled === false)
+    check('the page number says which page it is for a screen reader', pagerButton('2').props['aria-label'] === '第 2 页', String(pagerButton('2').props['aria-label']))
+    await act(async () => { pagerButton('next').props.onClick() })
+    await flush(120)
+    check('the next step asks for the next page', trailRpc.calls.some((call) => call.method === 'trail' && call.args.page === 3))
+    // The last page is the end of the list, so the step stops there.
+    await act(async () => { pagerButton('prev').props.onClick() })
+    await flush(120)
+    check('the previous step walks back', trailRpc.calls.some((call) => call.method === 'trail' && call.args.page === 2))
+
+    const range = () => root().findAll((node) => node.props?.['data-vw-range-btn'] !== undefined)
+    check('both windows are offered', range().length === 2 && range()[0].props['aria-pressed'] === true)
+    await act(async () => { range()[1].props.onClick() })
+    await flush(120)
+    check('a wider window is re-read from the host', trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 30), JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').map((call) => call.args)))
+    check('the wider window is the selected one', range()[1].props['aria-pressed'] === true && range()[0].props['aria-pressed'] === false)
+
+    // Back to the list: the other page must still be there, still be the
+    // list, and still be inside the same container.
+    await act(async () => { tabs()[0].props.onClick() })
+    await flush()
+    check('switching back keeps the container too', scrollArea() === container)
+    check('switching back restores the search box', bodyText().includes('data-vw-search'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the trail page's three states outside 'ready' ─────────────────────────
+  // A cold index answers partially and keeps filling in; a host that cannot
+  // read the logs answers with an error. Both are pages, not spinners: the
+  // numbers already known stay on screen in the first case, and the second
+  // says so in words instead of showing a zero it did not measure.
+  {
+    const stateOf = (renderer) => renderer.root.findAll((node) => node.props?.['data-vw-trail-state'] !== undefined).map((node) => [node.props['data-vw-trail-state'], node.props.children])
+    const countOf = (renderer) => renderer.root.findAll((node) => node.props?.['data-vw-trail-count'] !== undefined).map((node) => node.props.children)
+    const open = async (route) => {
+      const rpc = makeRpc({ trail: route })
+      const panel = await mountPanel(mod, {}, rpc)
+      await flush()
+      const tab = panel.renderer.root.findAll((node) => node.props?.role === 'tab')[1]
+      await act(async () => { tab.props.onClick() })
+      await flush(120)
+      return panel
+    }
+
+    const partial = await open(() => ({
+      ok: true,
+      value: { range: 7, total: 40, distinct: 12, requests: 3, days: [], sessions: [], models: [], rows: [], index: { pending: 150, total: 194, scannedAt: Date.now(), sessions: 194 } },
+    }))
+    check('a partly read index says so', stateOf(partial.renderer)[0]?.[0] === 'partial', JSON.stringify(stateOf(partial.renderer)))
+    check('a partly read index still shows its numbers', countOf(partial.renderer)[0] === '40', JSON.stringify(countOf(partial.renderer)))
+    await act(async () => { partial.renderer.unmount() })
+
+    const failed = await open(() => ({ ok: false, error: { code: 'unreadable', message: 'nope' } }))
+    check('an unreadable index says so', stateOf(failed.renderer)[0]?.[0] === 'error', JSON.stringify(stateOf(failed.renderer)))
+    check('an unreadable index shows no invented zero', countOf(failed.renderer)[0] === '—', JSON.stringify(countOf(failed.renderer)))
+    await act(async () => { failed.renderer.unmount() })
+
+    // An empty vault is a real answer, and it is the one case where zero is
+    // the truth: the numbers are zero, the rails say nothing was recorded,
+    // and the ledger says so in words.
+    const empty = await open(() => ({
+      ok: true,
+      value: { range: 7, total: 0, distinct: 0, requests: 0, days: [], sessions: [], models: [], rows: [], index: { pending: 0, total: 0, scannedAt: Date.now(), sessions: 0 } },
+    }))
+    check('an empty trail shows zero, not a dash', countOf(empty.renderer)[0] === '0', JSON.stringify(countOf(empty.renderer)))
+    check('an empty trail has no state line', stateOf(empty.renderer).length === 0, JSON.stringify(stateOf(empty.renderer)))
+    check('an empty trail says so in the ledger', JSON.stringify(empty.renderer.toJSON()).includes('还没有任何脱敏记录'))
+    check('an empty trail draws no river shape', empty.renderer.root.findAll((node) => node.props?.['data-vw-river-area'] !== undefined).length === 0)
+    await act(async () => { empty.renderer.unmount() })
+  }
+
+  // ── the trail tab's keyboard contract ────────────────────────────────────
+  // Left/Right cycle, Home/End jump. Both matter because the strip is a real
+  // tablist: a reader who reaches it by keyboard must be able to leave it.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc({ trail: () => ({ ok: true, value: { range: 7, total: 0, distinct: 0, requests: 0, days: [], sessions: [], models: [], rows: [], index: { pending: 0, total: 0, scannedAt: Date.now(), sessions: 0 } } }) }))
+    await flush()
+    const tabs = () => panel.renderer.root.findAll((node) => node.props?.role === 'tab')
+    const press = async (key) => act(async () => { tabs()[0].props.onKeyDown({ key, preventDefault() {} }) })
+    await press('ArrowRight')
+    await flush(80)
+    check('the right arrow opens the next tab', tabs()[1].props['aria-selected'] === true)
+    await press('ArrowLeft')
+    await flush(80)
+    check('the left arrow comes back', tabs()[0].props['aria-selected'] === true)
+    await press('ArrowLeft')
+    await flush(80)
+    check('the left arrow wraps to the last tab', tabs()[1].props['aria-selected'] === true)
+    await press('End')
+    await flush(80)
+    check('End stays on the last tab', tabs()[1].props['aria-selected'] === true)
+    await press('Home')
+    await flush(80)
+    check('Home jumps to the first tab', tabs()[0].props['aria-selected'] === true)
+    await act(async () => { panel.renderer.unmount() })
   }
 
   void t

@@ -171,6 +171,14 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== session log sweep test (redaction + frame layout + incrementality) ==="
   node test/sweeper.test.mjs
 
+  # The masking-trail index: the numbers the panel's second page shows. It reads
+  # the same logs the sweep rewrites, so it is tested here, beside it. The two
+  # failures worth guarding are silent: counting one mask twice (a repeated
+  # event line, or a superseded log version beside the current one) and
+  # re-decoding a warm log (300 MB on a real machine).
+  echo "=== masking trail index test (counts, dedup, incrementality, states) ==="
+  node test/trail.test.mjs
+
   # Session resilience: a failed token refresh may only cost the stored session
   # when the *server* refused it. Offline, 429 and 5xx must keep it (and must
   # never drag a two-factor account to the code prompt).

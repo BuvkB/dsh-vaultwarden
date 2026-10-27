@@ -109,7 +109,7 @@ async function main() {
     // FIXED: a field that is only *expected* to be an array used to reach a
     // `for…of` and throw `TypeError: sync.ciphers is not iterable` — not a
     // VaultError, so every caller's error handling missed it and the panel
-    // showed "凭据库操作失败：<internal message>" with no code. lib/vault.js now
+    // showed "密码库操作失败：<internal message>" with no code. lib/vault.js now
     // normalises these lists, so a wrong shape costs that one section of the
     // payload and the connection keeps working.
     // Only the broken field is dropped. A bad `ciphers` empties the list; a bad
