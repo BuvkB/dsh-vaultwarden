@@ -2,7 +2,7 @@
 
 ## 一句话
 
-跑门禁 → 提交并推 main → 打 tag → `npm publish` → `npm pack` → 建 Release 并**同时上传带版本号与不带版本号两个资产** → 四道复验。
+跑门禁 → 提交并推 main → 打 tag → `npm publish` → `npm pack` → 建 Release 并**同时上传带版本号与不带版本号两个资产** → 三道复验。
 
 **市场条目不需要再动，但 npm 必须发。** v0.8.1 起条目的 tarball 指向 `releases/latest/download/dsh-vaultwarden.tgz`（不带版本号的稳定资产名），GitHub 会自动解析到最新 release，因此发新版本不再产生市场 PR。
 
@@ -55,12 +55,13 @@ gh release create v0.8.2 \
 
 两者内容完全一致（同一 sha256）。有版本号的那个让「这份 tgz 是哪个版本」一眼可查；无版本号的那个让 URL 永远不变。
 
-## 四道复验
+## 三道复验
 
 1. 从 `https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz` 下载，核对 sha256 与本地一致；同时核对 GitHub 记录的 digest。
 2. 解包，检查修复标记齐全（每次发版按当版改动的关键字查）、`package/package.json` 版本号正确、`node --check` 全部 lib 文件通过。
 3. 对比发布产物与源码：`lib/client.js`、`CHANGELOG.md` 应逐字节一致。
-4. 真机端到端：打开 GUI 设置 → 密码库，确认面板打开、数据渲染、无 pageerror、无管理/调试接口调用。
+
+界面效果由作者本人在真实 GUI 里看，不列入发版门禁：自动化开浏览器只能证明「没白屏」，证明不了观感对不对，而它的代价是每次发版都要维护一套浏览器环境。
 
 ## 陷阱
 
