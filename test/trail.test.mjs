@@ -152,6 +152,26 @@ const main = async () => {
   check('masks with no model selection get their own row', week.models.some((row) => row.provider === null && row.model === null && row.count === 2), JSON.stringify(week.models))
   check('the model the request carried outranks the model picked in the UI', week.models.some((row) => row.provider === 'stepfun' && row.model === 'step-5-preview' && row.count === 1), JSON.stringify(week.models))
   check('the rails add up to the headline', week.models.reduce((sum, row) => sum + row.count, 0) === week.total, JSON.stringify(week.models))
+
+  // ── the board's flow ──────────────────────────────────────────────────────
+  // The board draws three conversations through a gate to three models. The
+  // pair counts have to be the real ones: a ribbon is a claim that THIS
+  // conversation sent THIS many masks to THAT model, not a product of two
+  // marginal totals. The fixture has one such pair (alpha → zcode, twice), one
+  // delta → stepfun pair, and beta's masks with no model at all, which must
+  // never become a ribbon.
+  check('the flow carries at most three conversations', week.flows.sessions.length <= 3, JSON.stringify(week.flows.sessions))
+  check('the flow carries at most three models', week.flows.models.length <= 3, JSON.stringify(week.flows.models))
+  check('the flow names the busiest conversation first', week.flows.sessions[0].name === '会话甲' && week.flows.sessions[0].count === 2, JSON.stringify(week.flows.sessions))
+  const alphaLink = week.flows.links.find((link) => link.session === 'session-alpha' && link.model === 'zcode/GLM-5.3')
+  check('a ribbon carries the real pair count', alphaLink?.count === 2, JSON.stringify(week.flows.links))
+  const deltaLink = week.flows.links.find((link) => link.session === 'session-delta' && link.model === 'step-5-preview')
+  check('a second pair is its own ribbon', deltaLink?.count === 1, JSON.stringify(week.flows.links))
+  check('masks with no model make no ribbon', week.flows.links.every((link) => link.provider !== null && link.model !== null), JSON.stringify(week.flows.links))
+  check('the flow accounts for everyone it leaves out', week.flows.otherSessions.count === week.total - week.flows.sessions.reduce((sum, row) => sum + row.count, 0) && week.flows.otherModels.count === week.total - week.flows.models.reduce((sum, row) => sum + row.count, 0), JSON.stringify(week.flows))
+  const flowMonth = aggregateTrail(state, { days: 30, now: NOW })
+  check('the 30-day board keeps the same three-row rule', flowMonth.flows.sessions.length === 3 && flowMonth.flows.models.length === 3 && flowMonth.flows.links.every((link) => link.count > 0), JSON.stringify(flowMonth.flows))
+  check('the board counts the conversations it did not name', flowMonth.flows.otherSessions.items === 1 && flowMonth.flows.sessions.length === 3, JSON.stringify(flowMonth.flows.otherSessions))
   check('the ledger is newest first', week.rows.length > 1 && week.rows[0].time >= week.rows[1].time, JSON.stringify(week.rows.map((row) => row.time)))
   check('the ledger names the conversation and the model', week.rows.every((row) => row.session && typeof row.name === 'string'), JSON.stringify(week.rows))
   // A step writes several placeholders at once and the next step writes more,

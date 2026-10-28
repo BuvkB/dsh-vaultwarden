@@ -4,6 +4,24 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-10-29
+
+### 新增
+
+- 新增脱敏看板：数据总量、按天柱状图、门禁视图、脱敏量前三的会话与模型，以及「另外 N 个」汇总。
+- 新增 `flows` 聚合：top3 会话、top3 模型、真实 session→model 配对计数与其余汇总。
+
+### 优化
+
+- 优化脱敏看板：三条完整会话到模型连线，左半段灰色表示脱敏前、右半段蓝色表示脱敏后；每根线一颗灰色粒子同速穿过；门禁竖线带上下扫描条；桌面三列、窄屏自适应。
+- 优化看板与详情页文案：主标题改为「敏感信息防泄漏」；五步改为「接收请求 → 识别 N 个敏感值 → 完成 N 处脱敏 → 转发至模型 → 模型响应」；值卡改为「敏感类型 / 匹配次数 / 脱敏占位符 / 命中位置」，并合并重复占位符卡片。
+- 优化标签栏与详情页返回按钮：标签栏按官方设置页对齐；返回按钮黑色加粗，悬停有底色、键盘聚焦有焦点环。
+- 优化样式热更新：样式表内容变化时同步更新已有 style 元素。
+
+### 测试
+
+- `test/client-card.test.mjs` 514 项、`test/trail.test.mjs` 135 项。
+
 ## [0.12.1] — 2026-10-28
 
 ### 修复

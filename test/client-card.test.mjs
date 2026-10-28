@@ -3191,11 +3191,45 @@ async function main() {
           distinct: 853,
           requests: 281,
           days: Array.from({ length: args.days }, (_, index) => ({ day: `2026-10-${String(index + 1).padStart(2, '0')}`, count: index })),
-          sessions: [{ key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 }],
-          models: [{ provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 }, { provider: null, model: null, count: 7 }],
+          sessions: [
+            { key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
+            { key: '/sessions/bbb', id: 'bbb', name: '馒头保号登录', count: 300 },
+            { key: '/sessions/ccc', id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
+            { key: '/sessions/ddd', id: 'ddd', name: '第四个会话不该上板', count: 90 },
+          ],
+          models: [
+            { provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 },
+            { provider: 'stepfun', model: 'step-5-preview', count: 220 },
+            { provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 120 },
+            { provider: 'zhipu', model: 'glm-5', count: 60 },
+            { provider: null, model: null, count: 7 },
+          ],
+          // Only the three busiest on each side get a ribbon. The pairs are
+          // what the board draws, not a decoration: 400 went aaa →
+          // workbuddy, 180 went bbb → stepfun, 90 went ccc → zcode.
+          flows: {
+            sessions: [
+              { id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
+              { id: 'bbb', name: '馒头保号登录', count: 300 },
+              { id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
+            ],
+            models: [
+              { provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 },
+              { provider: 'stepfun', model: 'step-5-preview', count: 220 },
+              { provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 120 },
+            ],
+            links: [
+              { session: 'aaa', provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 400 },
+              { session: 'bbb', provider: 'stepfun', model: 'step-5-preview', count: 180 },
+              { session: 'ccc', provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 90 },
+            ],
+            otherSessions: { count: 175, items: 1 },
+            otherModels: { count: 190, items: 2 },
+          },
           rows: [
             { time: Date.parse('2026-10-26T14:15:00+08:00'), count: 12, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
             { time: Date.parse('2026-10-26T09:02:00+08:00'), count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
+            { time: Date.parse('2026-10-26T08:02:00+08:00'), count: 7, provider: null, model: null, session: 'ccc', name: '脱敏流水详情页与移动端优化' },
           ],
           // Three pages of bursts, the first one asked for. The page the host
           // answers with is the page the pager shows: it clamps the number, so
@@ -3231,13 +3265,19 @@ async function main() {
     check('the trail page carries the headline the host answered', trail().findAll((node) => node.props?.['data-vw-trail-count'] !== undefined)[0].props.children === '1,557')
     check("the trail page drops the search box and the rail", !bodyText().includes("data-vw-search") && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 0)
     check('the trail page names the conversations that asked', bodyText().includes('喜鹊服务配置与插件安装'))
-    // Provider and model are two lines in one cell, not one joined string: the
-    // joined form is forty characters and got cut inside the model's name.
-    const railModels = () =>
-      root().findAll((node) => node.props?.['data-vw-trail-rail'] === 'models')[0].findAll((node) => node.type === 'div')
-    check('the trail page splits the model rail at the provider', bodyText().includes('curi-gate') && bodyText().includes('workbuddy/deepseek-v4.1-flash'))
-    check('the model rail keeps the provider above the model', railModels().length > 0 && JSON.stringify(railModels()[0].props.children.length) === '2')
-    check('a mask with no model is not dropped from the rail', bodyText().includes('未记录模型'))
+    // The board is data first: one bar per day of the window, then the three
+    // busiest names on each side of the gate. More names must not sneak in —
+    // the animation is specified to follow three, and a fourth label at 320px
+    // would be a single ellipsis.
+    check('the board draws one bar per day of the window', root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length === 7, String(root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length))
+    check('the board names only the busiest three conversations', ['喜鹊服务配置与插件安装', '馒头保号登录', '脱敏流水详情页与移动端优化'].every((name) => bodyText().includes(name)) && !bodyText().includes('第四个会话不该上板'))
+    check('the board draws one grey track for each real pair', root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length))
+    check('each of the three full lines gets one moving particle', root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length))
+    check('the gate line has a downward scan bar', root().findAll((node) => node.props?.['data-vw-gate-scan'] !== undefined).length === 1)
+    check('the board says what is off the three names', bodyText().includes('另外 1 个会话') && bodyText().includes('另外 2 个模型'))
+    check('the board carries the gate mark', root().findAll((node) => node.props?.['data-vw-trail-flow'] !== undefined)[0].findAll((node) => node.props?.title === '只放行脱敏后的请求').length === 1)
+    check('the model names keep their provider in the tooltip', bodyText().includes('curi-gate') && bodyText().includes('workbuddy/deepseek-v4.1-flash'))
+    check('a mask with no model is not dropped from the page', bodyText().includes('未记录模型'))
     const mask = (time) => `${String(new Date(time).getMonth() + 1).padStart(2, '0')}-${String(new Date(time).getDate()).padStart(2, '0')} ${String(new Date(time).getHours()).padStart(2, '0')}:${String(new Date(time).getMinutes()).padStart(2, '0')}`
     check('the ledger names the minute a mask happened', bodyText().includes(mask(Date.parse('2026-10-26T14:15:00+08:00'))), mask(Date.parse('2026-10-26T14:15:00+08:00')))
     // A burst is one row with its own size, so the ledger has to say how many
@@ -3290,6 +3330,7 @@ async function main() {
     await flush(120)
     check('a wider window is re-read from the host', trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 30), JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').map((call) => call.args)))
     check('the wider window is the selected one', range()[1].props['aria-pressed'] === true && range()[0].props['aria-pressed'] === false)
+    check('the wider window draws thirty bars', root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length === 30, String(root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length))
 
     // Back to the list: the other page must still be there, still be the
     // list, and still be inside the same container.
@@ -3397,10 +3438,10 @@ async function main() {
     const steps = () => detail().findAll((node) => node.props?.['data-vw-detail-step'] !== undefined)
     check('the burst is told as five steps', steps().length === 5, String(steps().length))
     check('the steps are numbered in order', steps().map((node) => node.props['data-vw-detail-step']).join(',') === '1,2,3,4,5', steps().map((node) => node.props['data-vw-detail-step']).join(','))
-    check('the first step names the minute the row showed', bodyText().includes('收到'), '')
-    check('the values and the places are two different numbers', bodyText().includes('发现 2 个值') && bodyText().includes('替换 12 处'), '')
-    check('the model step names the model the row named', bodyText().includes('发送模型') && bodyText().includes('workbuddy/deepseek-v4.1-flash'), '')
-    check('the last step says the value came back out', bodyText().includes('又出现 1 处'), '')
+    check('the first step names the minute the row showed', bodyText().includes('接收请求'), '')
+    check('the values and the places are two different numbers', bodyText().includes('识别 2 个敏感值') && bodyText().includes('完成 12 处脱敏'), '')
+    check('the model step names the model the row named', bodyText().includes('转发至模型') && bodyText().includes('workbuddy/deepseek-v4.1-flash'), '')
+    check('the last step says the value came back out', bodyText().includes('返回 1 处'), '')
     // The left column is a reading order, oldest first, with the mask marked.
     const ink = () => detail().findAll((node) => node.props?.['data-vw-detail-ink'] !== undefined)
     check('every occurrence is shown with the text around it', ink().length === 4, String(ink().length))
@@ -3434,7 +3475,7 @@ async function main() {
     const countIn = (node, prop) => node.findAll((child) => child.props?.[prop] !== undefined).length
     check('each value card is three lines, not a field wall', valueCards().every((node) => cardLines(node).length === 3), JSON.stringify(valueCards().map((node) => cardLines(node).length)))
     const kinds = () => detail().findAll((node) => node.props?.['data-vw-detail-kind'] !== undefined)
-    check('a value names its field in words', kinds()[0].props.children === '密码' && kinds()[1].props.children === '擦除标记', JSON.stringify(kinds().map((node) => node.props.children)))
+    check('a value names its field in words', kinds()[0].props.children === '敏感类型：密码' && kinds()[1].props.children === '敏感类型：脱敏占位符', JSON.stringify(kinds().map((node) => node.props.children)))
     check('the field is named once, with no label in front of it', !bodyText().includes('发现方式') && !bodyText().includes('查找方式'), '')
     const codes = () => detail().findAll((node) => node.type === 'code')
     check('the placeholder is shown as it stood in the text', codes()[0].props.children === '{{BW_PASSWORD_7kzaipdf}}' && codes()[1].props.children === '[REDACTED:BW_PASSWORD]', JSON.stringify(codes().map((node) => node.props.children)))
@@ -3445,7 +3486,7 @@ async function main() {
     // 12 is how many spots the index counted for that value; the six windows
     // kept in the log are a sample of them, not the number itself.
     const counts = () => detail().findAll((node) => node.props?.['data-vw-detail-value-count'] !== undefined)
-    check('a repeated value says how many spots it filled', counts().length === 1 && counts()[0].props.children === '×12', JSON.stringify(counts().map((node) => node.props.children)))
+    check('a repeated value says how many spots it filled', counts().length === 1 && counts()[0].props.children === '匹配次数：12', JSON.stringify(counts().map((node) => node.props.children)))
     const countsIn = (card) => card.findAll((node) => node.props?.['data-vw-detail-value-count'] !== undefined)
     check('a value replaced once has no count to say', countsIn(valueCards()[1]).length === 0, String(countsIn(valueCards()[1]).length))
     // A card says where its trace appeared — the answer to "why is this on the
@@ -3478,7 +3519,7 @@ async function main() {
     // from the hit, or the page would be claiming a match it did not make.
     check('a marker gets no preview and no arrow', countIn(valueCards()[1], 'data-vw-detail-origin') === 0 && countIn(valueCards()[1], 'data-vw-detail-arrow') === 0)
     check('the old explainer paragraph is gone', !bodyText().includes('条目删了、改过'), '')
-    check('the two columns are the request text and how it was masked', bodyText().includes('请求内容') && bodyText().includes('怎么遮的'), '')
+    check('the two columns are the request text and how it was masked', bodyText().includes('请求内容') && bodyText().includes('脱敏明细'), '')
 
     // ── stepping, and coming back ──────────────────────────────────────────
     const stepBtn = (key) => detail().findAll((node) => node.props?.['data-vw-detail-step-btn'] === key)[0]
@@ -3578,7 +3619,7 @@ async function main() {
     await act(async () => { gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0].props.onClick() })
     await flush(120)
     const goneText = () => JSON.stringify(gonePanel.renderer.toJSON())
-    check('a row with no log still shows its numbers', goneText().includes('替换 12 处') && goneText().includes('发现 0 个值'), '')
+    check('a row with no log still shows its numbers', goneText().includes('完成 12 处脱敏') && goneText().includes('识别 0 个敏感值'), '')
     check('a missing log is said, not shown as an empty column', goneText().includes('对应的会话日志已经不在了，只剩下指纹'), '')
     check('an empty value column is said too', goneText().includes('没有可显示的值'), '')
     check('the row still steps back to the ledger', gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined).length === 0, '')
@@ -3688,7 +3729,7 @@ async function main() {
     check('an empty trail shows zero, not a dash', countOf(empty.renderer)[0] === '0', JSON.stringify(countOf(empty.renderer)))
     check('an empty trail has no state line', stateOf(empty.renderer).length === 0, JSON.stringify(stateOf(empty.renderer)))
     check('an empty trail says so in the ledger', JSON.stringify(empty.renderer.toJSON()).includes('还没有任何脱敏记录'))
-    check('an empty trail draws no river shape', empty.renderer.root.findAll((node) => node.props?.['data-vw-river-area'] !== undefined).length === 0)
+    check('an empty trail draws no ribbons', empty.renderer.root.findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length === 0)
     await act(async () => { empty.renderer.unmount() })
   }
 
