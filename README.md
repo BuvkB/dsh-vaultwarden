@@ -1,398 +1,74 @@
-# dsh-vaultwarden — 让每个 DSH 会话实时同步 Vaultwarden 密码库
+# dsh-vaultwarden
 
-把自建 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：任何新建会话（无论 workspace）都会自动知道"密码可以去 Bitwarden 里读"；服务器端任何增删改都会通过 WebSocket **实时**反映到本地，无需手动刷新。密码默认不会以明文出现在会话里：开启**占位符脱敏**后模型读到的是可引用、可比较、推不回原值的占位符，需要时才按条目+字段单次取回；配合**日志擦除**，落盘会话日志中的 bitwarden 明文也会被定期替换为 `[REDACTED:BW]`。
+[English](README.en.md) | 中文
 
-> **独立实现**：直接对接 Bitwarden/Vaultwarden 服务端 REST 与 SignalR 协议，不依赖 `bw` CLI，除可选的 `hash-wasm`（Argon2id KDF）外只用 Node 内置模块。
-> 设计过程中参考了两个 MIT 项目，详见文末[「参考与致谢」](#参考与致谢)。
+把 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：每个会话都能按需检索和读取密码库；服务器变更通过 WebSocket 实时同步；请求发出前自动脱敏，落盘日志中的明文可被擦除，并在「设置 → 密码库」提供密码浏览与脱敏看板。
 
-## 界面预览
+![密码库面板](assets/panel-list.png)
 
-| 条目列表 | 条目详情（浅色） | 条目详情（暗色） | 新建条目 |
-| --- | --- | --- | --- |
-| ![列表](assets/panel-list.png) | ![详情](assets/panel-detail.png) | ![暗色详情](assets/panel-detail-dark.png) | ![新建条目](assets/panel-editor.png) |
+## 主要能力
 
-> 截图中的条目为演示数据；界面颜色全部取自宿主的 `--dsw-alias-*` 主题 token，因此浅色/暗色下都跟随主题。
-
-## 装了什么
-
-| 能力 | 说明 |
-| --- | --- |
-| 实时同步引擎 | 登录后订阅 `/notifications/hub`（SignalR over WebSocket），服务器变更即时推送 → 400ms 防抖 → `/api/sync` 重同步 + 解密换缓存（Vaultwarden 的同步接口没有增量参数，只有全量）；WebSocket 不可用（`ENABLE_WEBSOCKET=false`、旧服务器、反代不放行）自动降级为轮询，并**每 30–120 秒自动重试升级回 WebSocket**；429 限流自动退避 |
-| 9 个全局工具 | `bitwarden_find`（检索：名称/用户名/URL/备注/自定义字段；默认不含密码，也不含归档与回收站）、`bitwarden_get`（默认 `field=all` 只回密码/用户名/网址/备注/自定义字段；TOTP 验证码与银行卡/身份信息/安全笔记/SSH 私钥需点名 `field=totp` / `card` / `identity` / `secureNote` / `sshKey` 单独取；取 TOTP 可加 `waitFresh` 等一个至少剩 `minRemaining` 秒（默认 20）的窗口，避免拿到马上就要过期的码）、`bitwarden_status`（配置/连通/解锁/同步模式/归档与回收站条数）、`bitwarden_sync`（强制同步）、`bitwarden_folders`（文件夹 id + 名字 + 条目数）、`bitwarden_restore`（从回收站恢复）、`bitwarden_create`/`bitwarden_update`/`bitwarden_delete`（写回，默认关闭） |
-| 系统提示词章节 | 全局注入引导：需要任何账号、密码、API key、token 时先自查密码库，而不是先问用户 |
-| 配置表单 | 由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）：12 个字段（服务器/邮箱/主密码/API 密钥/同步与缓存开关/权限档/会话天数），密钥字段为只写 |
-| 条目浏览面板 | 设置 → 密码库 独立页面：**层级分区菜单**（全部条目/收藏/验证码 + 类型分组 + 文件夹分组 + 未归类 + 归档/回收站，每行带**画出来的 SVG 线稿图标**与扁平计数药丸，切回刚看过的分区**不重新加载**）+ 搜索、列表、详情、复制、TOTP 圆环倒计时（弧随剩余时间缩短，色从绿经橙渐变到红）、reprompt 条目受保护；列表行显示**服务端缓存的站点图标**（取不到就退回首字母圆枕）；**验证码分区行** = 图标 + 名称 + 用户名 + 圆环 + 6 位码 + 复制；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）各自的详情字段、附件与密码历史折叠区；`accessMode` 非 readonly 时详情底部出现**写操作**（归档/取消归档、移入回收站、恢复、移动文件夹，逐个二次确认）；同步徽标**可点击手动同步**，悬停显示模式/连接/间隔/上次同步/错误。列表按 50 条分页续读。面板顶部的分页条通向第二页 **脱敏轨迹**：这个库里的东西有多少、什么时候、被哪个会话与哪个模型读过，按天画出趋势、按会话与模型分栏、流水逐页翻，见下文[「脱敏轨迹」](#脱敏轨迹) |
-| 认证通道 | 面板经 `/api` connection RPC 取数（`vw/*` 命名空间）——**走操作者已认证会话**，插件不自建 HTTP 路由 |
-| 插件列表彩色图标 | 按宿主 artwork 规范提供包根 `icon.svg`（双层盾牌：紫 #6C4DF6 + 蓝 #2E6BE6，白色镂空钥匙孔）；设置页「密码库」一行同用盾牌线稿，替换宿主默认齿轮 |
-
-插件直连服务器 REST API（`/identity/accounts/prelogin`、`/identity/connect/token`、`/api/sync`、`/api/ciphers*`），
-**不依赖 `bw` CLI**；除可选的 `hash-wasm`（Argon2id KDF）外全部使用 Node 内置模块。
-
-## 配置
-
-三种方式，优先级从高到低：**用户设置（GUI/settings.yaml）→ 插件组合配置 → 环境变量 → 默认值**。
-
-### 1. DSH 设置界面（推荐）
-
-**设置 → 插件 → 插件配置 → Bitwarden / Vaultwarden 密码库**：主密码与 API 密钥是**只写字段**（保存后不回传浏览器，留空表示不修改）。
-
-| 字段 | 说明 |
-| --- | --- |
-| `serverUrl` | 服务器地址，如 `https://vault.example.com` 或 `http://192.168.x.x`（留空则插件待配置，不报错） |
-| `email` | 登录邮箱。**必须与账号一致**——它是 KDF 的盐值 |
-| `masterPassword` | 主密码（secret）。用于派生主密钥、解密保险库，只存本机 `settings.yaml` |
-| `apiKeyClientId` / `apiKeyClientSecret` | 可选。Bitwarden 网页端 → 账户设置 → 安全 → 密钥；填了走 API 密钥登录，**可绕过两步验证** |
-| `websocket` | 启用 WebSocket 实时通知（默认开） |
-| `pollIntervalSeconds` | WebSocket 不可用时的兜底轮询间隔（默认 300 秒，最小 30）。WebSocket 正常时用不到，徽标可点击手动同步 |
-| `cacheMinutes` | 解锁后的内存缓存时长（默认 30 分钟） |
-| `localCache` | 本地密文缓存（默认开）。把上次同步的密文写到本机，下次启动先出列表、再用 13 字节的账号修订号问服务器变没变；关闭则每次启动都重新全量下载 |
-| `deviceIdentifier` | 可选设备标识。官方桌面/浏览器客户端会持久化稳定值；**留空按「服务器+邮箱」确定性派生，不写盘** |
-| `accessMode` | 写权限：`readonly`（默认，一律拒绝写回）/ `ask`（模型工具每次写回需用户确认）/ `auto`（直接写回）。**这一档只管模型工具**：面板里的人工操作走已认证会话 RPC，不受它约束。只能在 DSH 设置 → 插件 → bitwarden 里改，`vw/configure` 不再接受该参数。个人条目与组织条目都可写（创建组织条目传 `organizationId` + `collectionIds`） |
-| `sessionDays` | 登录会话保留天数（默认 30，0=每次重登）。**按闲置计时**：期间只要用过一次就自动续期，闲置超期才失效 |
-| `repromptGrantMinutes` | 「重新验证」条目在面板里验证主密码后，记住几分钟（默认 5）。**与登录会话无关**：它是一段纯内存的时间窗，插件重启或会话失效即作废，不会变成「每次重启都要重输密码」 |
-
-### 2. 环境变量
-
-`DSH_BITWARDEN_SERVER`、`DSH_BITWARDEN_EMAIL`、`DSH_BITWARDEN_MASTER_PASSWORD`、
-`DSH_BITWARDEN_CLIENT_ID`、`DSH_BITWARDEN_CLIENT_SECRET`、`DSH_BITWARDEN_DEVICE_ID`（也接受去掉 `DSH_` 前缀的写法）。
-
-### 3. 组合配置
-
-profile 的 cordis 配置里给插件传入同名字段即可。
-
-## 用法（模型侧）
-
-```
-bitwarden_find    { "query": "github" }                → 条目列表（元信息，无密码）
-bitwarden_find    { "query": "旧", "includeTrashed": true, "includeArchived": true }
-                                                       → 连回收站与归档一起列（默认都不列）
-bitwarden_get     { "id": "…", "field": "password" }   → 用户名 + 密码
-bitwarden_get     { "name": "GitHub 工作账号", "field": "totp" } → 当前动态码（返回值 freshFor 是这枚码还剩多少秒）
-bitwarden_get     { "id": "…", "field": "totp", "waitFresh": true } → 等一个可用窗口再给码（默认至少剩 20 秒）
-bitwarden_get     { "id": "…", "field": "totp", "waitFresh": true, "minRemaining": 25 }
-                                                       → 自定义门槛；传 0 表示不等待
-bitwarden_get     { "id": "…" }                          → field=all：密码/用户名/网址/备注/自定义字段
-bitwarden_get     { "id": "…", "field": "card" }       → 卡号等，另外 identity / secureNote / sshKey 同理
-bitwarden_status  { "refresh": true }                  → 状态报告（含 liveSync / 条目/归档/回收站条数 / 最近一次会话事件）
-bitwarden_sync    { }                                  → 强制重新同步
-bitwarden_folders { }                                  → 文件夹 id + 名字 + 条目数（folderId 从这里来）
-bitwarden_create  { "name": "新站点", "username": "…", "password": "…" } → 写回（需 accessMode=ask/auto）
-bitwarden_create  { "name": "新站点", "type": "card", "card": { "number": "…" } } → 信用卡/身份/安全笔记/SSH 密钥同理
-bitwarden_update  { "id": "…", "password": "新密码" }   → 改密（需 accessMode=ask/auto）
-bitwarden_update  { "id": "…", "folderId": null }      → 移出文件夹（不传=不动，传 id=移入）
-bitwarden_update  { "id": "…", "archived": true }      → 归档 / false 取消归档
-bitwarden_delete  { "id": "…" }                        → 软删进回收站（需 accessMode=ask/auto）
-bitwarden_delete  { "id": "…", "permanent": true, "confirm": true } → 彻底删除（不可逆，必须带 confirm）
-bitwarden_restore { "id": "…" }                        → 从回收站恢复（需 accessMode=ask/auto）
-bitwarden_reveal  { "id": "…", "field": "password" }  → 占位符脱敏模式下取回明文（见下节）
-bitwarden_sweep   { }                                  → 立即擦除本地会话日志中的 bitwarden 明文（见下节）
-```
-
-### 取 TOTP 为什么需要 waitFresh
-
-动态码只有 30 秒有效，而模型拿到码之后还要再发起一次工具调用才能填进表单——这一来一回要花真实时间。取到一个只剩 1 秒的码，等于没取到：提交必然失败，在限制尝试次数的站点上还白白消耗一次机会。
-
-`waitFresh: true` 在取码这一侧解决它：剩余时间不够就**先等到下一个窗口**，再把码交出去。
-
-```
-bitwarden_get { "id": "…", "field": "totp", "waitFresh": true }
-→ { "totp": { "code": "…", "remaining": 29, "freshFor": 29, … } }
-```
-
-`freshFor` 是这枚码还能用多久，调用方据此判断来不来得及。
-
-**只有"码存在且即将过期"才会等。** 下面这些情况一律立即返回，不会傻等：
-
-| 情况 | 表现 |
-| --- | --- |
-| 条目没有 TOTP 种子 | 直接返回 `totp: null` |
-| 条目开了「重新验证」且未解锁 | 返回 `repromptRequired: true` |
-| `field` 不是 `totp` | `waitFresh` 被忽略 |
-| `minRemaining: 0` | 不等，立即返回（哪怕只剩 1 秒） |
-
-## 本地脱敏：占位符 + 按需取回 + 日志擦除
-
-默认关闭。开启后分两层，各堵一个明文暴露面：
-
-- **模型侧（占位符脱敏，maskMode）**：`bitwarden_get` 不再返回明文，改返回与值一一对应的稳定占位符；确因任务需要明文时，`bitwarden_reveal` 按条目 + 字段单次取回。明文只在实际用到的那一刻进入模型上下文，其余时候上下文里只有推不回原值的占位符。
-- **磁盘侧（日志擦除，sweepMode）**：DSH 会把每次工具调用的参数与结果**原文写进硬盘**（`~/.dsh/sessions/` 下的会话日志）。擦除定时扫描这些日志，把其中 bitwarden 相关的明文替换为 `[REDACTED:BW]`，其他内容逐字节不动。扫描是**增量**的：只处理自上次擦除以来被写过的日志，重写时只重新压缩真正改动的帧，稳态下每轮是毫秒级。
-
-两个开关都在 **设置 → 插件 → bitwarden**：**占位符脱敏**（maskMode）与**日志擦除**（sweepMode），另有**擦除间隔（分钟）**（默认 30，0 = 关定时，手动 `bitwarden_sweep` 始终可用）。
-
-### 数据流一览
-
-```mermaid
-flowchart TD
-  subgraph NET["密码库服务器（只见密文）"]
-    SRV[("Vaultwarden / Bitwarden 服务器<br/>只存密文")]
-  end
-  subgraph LOCAL["本机 dsh-vaultwarden 插件进程"]
-    direction TB
-    CLIENT["unlockKeys()<br/>Argon2 派生主密钥（hash-wasm，本地）"]
-    DEC["AES 解密 vault<br/>明文投影只存在于内存"]
-    MASK["maskProjection()<br/>password / TOTP / notes / 卡号 / 私钥<br/>→ {{BW_KIND_8位tag}}"]
-    MKEY[("mask.key（0600）<br/>本地 HMAC 密钥")]
-    REVEAL["bitwarden_reveal<br/>设计上唯一的明文出口（用完即弃）"]
-  end
-  subgraph MODEL["模型上下文"]
-    GET["bitwarden_get 查询<br/>只看到占位符 {{BW_PASSWORD_vfvyvkan}}"]
-    FILL["拿明文登录目标服务<br/>（第三方系统 / API）"]
-  end
-  subgraph DISK["本机磁盘"]
-    LOG[("~/.dsh/sessions/<br/>session.v*.jsonl.zstd")]
-    SWEEP["sweepMode 定时擦除<br/>空闲会话才扫<br/>明文 → [REDACTED:BW]"]
-  end
-  MP[("目标服务<br/>（需要登录的第三方）")]
-  SRV -->|HTTPS 密文| CLIENT --> DEC
-  DEC -->|明文投影| MASK
-  MKEY -.读取.-> MASK
-  MASK -->|占位符| GET
-  GET -->|确需明文时, 模型主动调用| REVEAL
-  DEC -.同一份明文.- REVEAL
-  REVEAL -->|真密码一次性交付| FILL
-  FILL -->|账号 + 密码| MP
-  REVEAL -.回显瞬时落盘.-> LOG
-  FILL -.回显瞬时落盘.-> LOG
-  LOG --> SWEEP
-```
-
-**防护边界（如实）**：解密全程在插件进程内完成，密码库服务器只见密文；`bitwarden_get` 默认只交付占位符；明文仅由 `bitwarden_reveal` 一次性交付给模型，落盘痕迹由日志擦除负责抹掉。换句话说——脱敏堵的是「默认外泄」，不是「按需取回」：需要明文的那一刻，模型仍然看得到真值。详见下文「残留风险（如实说明）」。
-
-### 占位符脱敏（maskMode）
-
-开启后 `bitwarden_get` 不再返回明文，而是稳定的占位符：
-
-```
-bitwarden_get { "id": "…", "field": "password" }
-→ { "password": "{{BW_PASSWORD_vfvyvkan}}", … }
-```
-
-- **稳定**：占位符 = HMAC-SHA256(条目 id + 字段名 + 值) 的前 8 位 base32，同一值恒得同一占位符——可以引用、比较、判断改没改，但反推不出原值，别的条目/字段盐不同也得不到同一个标签。密钥是独立的 `data/dsh-vaultwarden/mask.key`（0600），不与缓存密钥混用。
-- **覆盖**：password、TOTP 码、notes、安全笔记正文、自定义字段值、卡号与安全码、SSH 私钥、密码历史、身份证明文编号（SSN/护照/驾照）。用户名、品牌、指纹等「句柄」类信息照常返回——它们本身不是机密，遮了只会让模型没法干活。
-- **取回**：确因任务需要明文（登录、填表、派生 token）时，`bitwarden_reveal` 按条目 + 字段单次取回。reveal 走的是与 get 相同的读取路径（含 reprompt 闸门），用完即弃。
-- 模型侧协议在 maskMode 开启时自动写进系统提示词，无需人工提醒。
-
-### 日志擦除（sweepMode / bitwarden_sweep）
-
-DSH 会话日志（`~/.dsh/sessions/` 下的 `session.v*.jsonl.zstd`）会把工具参数与结果原文落盘——reveal 取回的明文、以及 `bitwarden_create/update` 写入的密码都会留在里面。开启日志擦除后，插件在间隔到期时扫描**已空闲**（会话锁 10 分钟无动静）的日志，把其中 bitwarden 工具事件里的明文替换为 `[REDACTED:BW]`，占位符原样保留：
-
-- 只动 bitwarden 工具的参数与结果（通过 callId 关联），其他工具的记录与用户消息逐字节不动。
-- 幂等：擦过的日志再扫一遍是空操作；重写保留文件权限与时间戳（时间戳是空闲判定依据，不能被重写重置）。
-- 进行中的会话跳过——擦除绝不与宿主写入并发。会话结束后下一次定时扫描会补上。
-- **增量**：每份日志记一条状态（大小、mtime、已收割到的字节偏移）。没变过的日志整轮跳过，不解压也不解析；变过的只看新追加的字节。zstd 日志是只追加写的、历史帧不可变，所以重写时**只重新压缩真正改动的帧**，其余帧按原字节拷贝。
-- 只读新增字节不会藏住回显：一个值的回声只可能出现在该值**出现之后**写下的字节里，所以「旧的字节已经看过」是真的看过。
-- **不霸占宿主**：解码优先用 Node 内置 zstd（走线程池，不占主线程），系统 `zstd` 只在旧 Node 上作为回落；一轮有时间预算，超预算就停下，剩下的由状态簿留给下一轮接着做。
-
-### 残留风险（如实说明）
-
-- reveal 拿到明文到下一次擦除之间存在**落盘窗口**；擦除的默认空闲判定 10 分钟 + 定时间隔都会拉长它。介意就把间隔调小，或每次用完立刻 `bitwarden_sweep`。
-- 擦的是**磁盘**，不改模型已经看到的内容。
-- `~/.dsh/backups`、cost-meter ledger 等插件够不着的落盘点不在覆盖范围。
-
-## 用法（人侧）
-
-**设置 → 密码库**（左栏新增入口）：左边是**分区菜单**——全部条目 / 收藏 / 验证码三行，然后是「类型 (n)」（登录、安全笔记、银行卡、身份信息、SSH 密钥）与「文件夹 (n)」（各文件夹 + 未归类）两组，最后是「归档」「回收站」，每行右侧写明条数；点一行，右边就换成那个分区的条目，**切回刚离开的分区直接复用刚才读到的快照，不再请求服务器**（5 分钟内有效；搜索、刷新和写操作仍会重查）。桌面端左栏在右侧列表滚动时**固定不动**（`position: sticky`），窄屏（面板不足 480px）左栏移到列表上方、跟着内容一起滚动。
-
-右边是搜索框（`/` 聚焦、Esc 清空、↑↓ 选择）+ 条目列表 + 条目详情：列表行显示**站点图标**（服务端已缓存，取不到就用首字母圆枕）、名称、用户名·URI、收藏星与 TOTP 徽标（归档条目带「已归档」徽标，回收站条目名称划掉并带「回收站」徽标）；点开某条，列表让位给详情（左上方「‹ 返回列表」回去），详情里密码默认掩码可切换、每行有复制按钮、TOTP 是圆环倒计时，另有备注/自定义字段/目录，附件与密码历史各自折叠，按类型显示卡片/身份/SSH 密钥字段。Bitwarden 里开了「重新验证」的条目不会自动出明文：详情里是一句说明 + **主密码输入框**，验证一次后这段时间内（默认 5 分钟）可以正常读取该条目的任何字段。银行卡 / 身份信息 / SSH 私钥 / 安全笔记正文不再随详情一次带出，改为「含银行卡 · 读取这一项」这样的一行，点一下才单独取那一个字段。
-
-进入「验证码」分区时，每一行就是 App 里的样子：图标 + 名称 + 用户名 + 倒计时圆环 + 分组的 6 位动态码（如 `686 029`）+ 复制按钮，点码只复制、不打开条目。
-
-`accessMode` 为 `ask`/`auto` 时，详情底部多出「操作」区：归档 / 取消归档、移入回收站、恢复、移动到文件夹——每个操作都要再点一次「确认」，并在确认框里注明**面板操作不受 accessMode 门禁保护，请谨慎操作**（面板走的是已认证会话 RPC，没有逐次审批弹窗；模型工具的 `ask` 审批不受影响）。这里只能**移入回收站**：面板与 RPC 都没有彻底删除的入口，那一步只在 `bitwarden_delete` 工具上（`ask` 档带真实审批）。`readonly` 档下这些按钮不渲染，只显示一行说明。分区的计数与列表都由服务器侧收窄后再取（`vw/overview` + `vw/list` 的 `section`/`sectionValue`），所以侧栏上的数字和点进去看到的条目数永远一致，分页也只在该分区内翻。
-
-`accessMode` 为 `ask`/`auto` 时还可以**改条目内容**：详情「操作」区有「编辑」，工具栏有「新建条目」。编辑器整体替换详情页，打开时宿主一次装配整条明文（`vw/draft`），表单按类型给全字段——登录的用户名/密码/TOTP 种子/网址/备注、安全笔记的正文、银行卡的持卡人/品牌/卡号/到期/安全码、身份信息的十几项、SSH 密钥的私钥/公钥/指纹；另有收藏、需要重新验证、文件夹与自定义字段。**保存只发变化过的字段**：没碰过的密码、TOTP 种子、用户名根本不进请求，所以表单没展示的通行密钥、附件、密码历史会原样留在服务端。保存成功后强制同步一次再重读列表，同步失败只说「已保存，但同步未完成」——写已经落地，报成失败会诱使重试、造出重复条目。若条目在此期间被别的客户端改过，宿主以 `stale_revision` 拒绝，编辑器停用保存并提示重新打开，而不是覆盖别人的修改。轮询模式下面板按宿主自报的间隔安静重读列表，别处的改动不用手动刷新也进得来（编辑器、设置表单、确认框、写入进行中不刷）。
-
-### 脱敏轨迹
-
-面板顶部的分页条有第二页：**脱敏轨迹**。它不带搜索框、也不带左侧分区菜单——那一页回答的不是「我有什么」，而是「这个库里的东西有多少被谁读过」。
-
-顶部是这段时间一共脱敏了多少处，配「不同的值」与「请求数」两个小指标、按天的柱状图，右边切 7 天 / 30 天；下面是一张**脱敏看板**——中间一条「门禁」竖线，DeepSeek 鲸标坐在线上，左侧是脱敏量前三的会话、右侧是脱敏量前三的模型，按排名各连一条完整的曲线：左半段灰色代表脱敏前、右半段蓝色代表脱敏后，每根线只有一颗灰色小粒子从左到右贯穿，门禁竖线有向下的发光扫描条，其余收成「另外 N 个」一行；再下面是**脱敏流水**，一行是一次突发（五分钟内同一会话、同一模型的多处脱敏并成一行并标出次数），最新的在最上面，一页 40 行，页面底部翻页；页脚写着这些数字是从哪来的。桌面与手机同一个组件：窄面板下数字与柱状图上下排、门禁变窄，三条流带仍完整可见。
-
-**每一行都能点开。** 点进去是那一分钟到底发生了什么：面包屑写着「脱敏流水 / 第 N/M 条」，带上一条 / 下一条原地翻，不用退回流水再找位置；五步说清这次请求——接收请求（时刻）→ 识别 N 个敏感值 → 完成 N 处脱敏 → 转发至模型 → 模型响应：返回 N 处 / 未收到模型回复；下面两栏，左边**请求内容**仅展示脱敏变更片段，其余内容已折叠，每段按代码块排版——日志里的 JSON 压成一行紧凑代码（保留括号和引号，只在标点后留空格，按面板宽度自然折行），长段落只留掩码附近的几行；右边**脱敏明细**每个值一张卡：敏感类型、匹配次数、脱敏占位符、命中位置（输入 / 工具调用 / 工具结果 / 回复）。挨得近（前后 120 字以内）的几处脱敏画在同一片段里，所以一条几千字、两端各有一处脱敏的 dispatch 行不会把整行拉进左栏。
-
-**占位符能反查回条目。** 标签是 `HMAC-SHA256(maskKey, 条目 id + 字段名 + 值)` 的前八位——猜不出来，但**能重算**，因为库里有除密钥以外的全部输入。所以值卡第一行是「前四位 + 一串点 → 占位符」，旁边是条目名：`Adm1••••••… → {{BW_PASSWORD_xxxxxxxx}}`。只给前四位，短于八个字符的值一个字符都不给。**它不打算当第二个密码查看器**：返回的 JSON 里没有全文，要看整条请打开那一条。
-
-**反查会落空，落空时说实话。** 擦除标记 `[REDACTED:BW]` 没有盐可算；验证码是「读到它的那一分钟」的函数，等同一次性标签；条目删了或改过，同一个标签就再也算不出来——这三种都只显示裸占位符，不编造。库锁着、没有 mask key、两步验证还没做，页面只是不显示条目名与前四位，既不报错也不假装「这一处没被遮住」。Bitwarden 里开了「重新验证」的条目在过门之前不参与重算：重算标签本身就等于绕过那道门。
-
-**这些数字是从落盘的会话日志里读出来的，不是另记的一份账。** 插件里没有任何地方会在脱敏发生时写一条事件，能读到的只有痕迹本身：占位符 `{{BW_<KIND>_<tag>}}`（`maskMode` 在写进日志之前就换掉了，明文从未落盘）与标记 `[REDACTED:BW]`（明文落了盘、擦除后重写）。所以一「处」脱敏就是一处痕迹。
-
-三处口径值得先说清楚，页脚也写着：
-
-- **按处不按行**：一次 reveal 会同时出现在 `tool/call`、`tool/result` 与 code 模式下的两个 dispatch 事件里，同一处由 `(callId, 种类, 上下文指纹)` 认定，每份日志只算一次，首次出现的那条时间就是脱敏发生的时刻。同一会话的多版本日志只读最高版本——实测 v2 与 v3 的 155 条事件逐条重叠，两份都读就是把每一次脱敏数两遍。
-- **擦除按一类计**：擦除器只写裸标记，不复述被擦的是哪个字段，所以擦除只能记成「一类」，而占位符能记成「一个值」。标记的「不同值」也是上下文指纹而非值本身（值已经没了）。
-- **日志按 mtime 选中**：窗口内跑过、但之后没再动过的会话不会被读，它的早期事件会漏。冷机器上全量语料 313 MB，第一次打开这一页是边读边出数字的：先给已读那部分的数，行上写着还剩多少份日志没读，读完自己停。
-
-**它改变隐私边界吗？落盘的日志里仍然没有明文，也没有明文进过模型。** 这一页读的是占位符与已擦除的标记；能反查出条目名和前四位，靠的是当场解开库、重算标签——不是从日志里把值读回来。日志里从来没有明文，也不会因为这一页而有。
-
-## 对 Bitwarden/Vaultwarden 客户端约定的遵从
-
-- **设备标识**：按「服务器+邮箱」确定性派生（可配置覆盖），不像官方 CLI 那样每次登录新建设备。
-- **通知类型**：按官方 `NotificationType` 枚举处理——`LogOut`（会话在别处被注销）会清除本地令牌与缓存，其余类型触发重同步。
-- **SignalR 协议**：negotiate → WebSocket（`access_token` 走 query）→ `{"protocol":"json","version":1}` 握手 → type 6 keepalive 应答 → type 1 ReceiveMessage。
-- **reprompt**：`reprompt: 1` 的条目不自动返回明文，**且这道门覆盖该条目的每一个字段**（备注与自定义字段同样算敏感）。打开它需要本人在面板里输入主密码；工具侧**没有任何参数能绕开**——过去那个 `confirm: true` 布尔标志已经删除，因为它等于给调用方（模型自己）一个自己打勾的复选框。验证一次开一个时间窗（默认 5 分钟，`repromptGrantMinutes` 可调），窗内不用重复输入；窗是**纯内存**的，插件重启或会话失效即作废。
-- **回收站语义**：软删走 `PUT /api/ciphers/{id}/delete`（写 `deletedDate`），彻底删除走 `DELETE /api/ciphers/{id}`；`POST /delete` 在服务端是彻底删除，插件不再使用。回收站条目默认不列出，`includeTrashed` 可看，`bitwarden_restore` 恢复。
-- **归档语义**：`archivedDate` 存在即归档；搜索默认排除，`includeArchived` 可看；写回不带该字段会被服务端解释为取消归档，所以插件原样带回。
-- **per-item key**：**更新复用条目原有的 64 字节密钥**（只对本次变更的字段重新加密），创建时才新生成一把；`cipher.key` 用用户密钥或组织密钥包裹（类型 2 EncString）。这样改密不会连带抹掉通行密钥、密码历史、URI 匹配策略这些插件不认识的字段。
-- **并发保护**：写回带 `lastKnownRevisionDate`；服务端发现条目已被其他客户端改过时返回 400，插件回「条目已被其他客户端修改，请重新读取后再试」。
-- **组织条目**：创建走 `POST /api/ciphers/create`（带 `collectionIds`），字段用组织密钥包裹；更新复用组织密钥与条目原 key。
-- **限流**：429 时按官方客户端的退避思路重试一次。
-
-## 安全说明
-
-- 主密码、用户密钥、解密后的条目**只存在内存**，不写盘、不打日志；插件只持久化用户填写的配置。
-- 落盘缓存里放的是**服务器原样返回的密文**（`~/.dsh/data/dsh-vaultwarden/vault-cache.json.gz`，gzip 压缩、权限 `0600`），插件自己不解密也不落明文；解密只在内存里发生。
-- 配置表单由宿主从插件 `Config` schema 派生（设置 → 插件 → bitwarden）；面板数据走 `/api` connection RPC（已认证会话），**没有绕过鉴权的自建路由**。
-- 工具返回的明文凭据会进入会话上下文（这是"让模型能用密码"的前提）。提示词要求模型不要回显、不要写入文件。
-- 写回默认关闭（`accessMode: readonly`）；`ask` 档**模型工具**每次写入都走 DSH 审批确认，`auto` 直接写入（面板的人工操作不受这一档限制）。个人条目与组织条目都支持；彻底删除只有 `bitwarden_delete` 工具能发起，必须显式带 `confirm: true`，面板与 RPC 只能移入回收站。
-- 落盘缓存带 HMAC-SHA256 签名（密钥 `~/.dsh/data/dsh-vaultwarden/cache.key`，`0600`）：签名不符、账号不匹配或没有密钥的缓存一律丢弃重下，防止把别处的缓存文件当成自己的读进来。
-
-## 排错
-
-| 现象 | 处理 |
-| --- | --- |
-| `密码库尚未配置完整` | 在设置卡片补 `serverUrl` + `email` + `masterPassword`（或 API 密钥） |
-| 面板停在「尚未配置完成」、只有「重试」按钮 | 0.2.1 及更早的全新安装会如此（`vw/config` 被 `sessionPersistence` 拖垮）。升级到 0.2.2，或先在 设置 → 插件 → dsh-vaultwarden 的配置卡片里手填三项，面板随即恢复 |
-| `登录失败：Username or password is incorrect` | 核对 `email`（必须与登录账号一致）与主密码 |
-| `该账户启用了两步验证` | 改用 API 密钥登录（client_id/client_secret） |
-| `该账户使用 Argon2id KDF` | 插件目录执行 `npm install hash-wasm`；或网页端把 KDF 改为 PBKDF2-SHA256 |
-| `无法连接 …` | 检查地址/端口/证书与网络可达性；自签证书需换成受信任证书 |
-| 实时同步不生效 | `bitwarden_status` 看 `liveSync.mode`：`polling` 说明 WebSocket 没通（反代需放行 `Upgrade`/`Connection`，或服务器 `ENABLE_WEBSOCKET=false`） |
-| 想让模型立刻重试 | `bitwarden_status { "refresh": true }` 或 `bitwarden_sync` |
-
-## 兼容性
-
-插件声明了四条 **peer 依赖**，全部标记为 `optional`（由宿主提供，npm 不会去装）：
-
-| peer | 范围 | 说明 |
-| --- | --- | --- |
-| `@deepseek-ai/dsh-tools` | `^0.1.0-0 \|\| ^0.1.1-0 \|\| ^0.1.2-0 \|\| ^0.1.3-0 \|\| ^0.1.5-0 \|\| ^0.1.6-0 \|\| ^0.1.7-0 \|\| ^0.2.0-0 \|\| ^0.2.1-0` | `defineTool` |
-| `@deepseek-ai/dsh-typert-protocol` | 同上 | `Remote` / `TypertRemoteService` |
-| `@deepseek-ai/schemastery` | `^3.18.0 \|\| ^3.18.1-0 \|\| ^3.18.5-0` | `Config` schema |
-| `@deepseek-ai/cordis` | `>=4.0.1-rc.1 <5 \|\| ^4.0.5-0` | 宿主内核（插件由宿主注入，不自行安装） |
-
-**支持范围：DSH 0.1.0 线到 0.2.x**（含全部已发布的预发布构建），拒绝 `0.0.1-rc.*` 与 `0.3.0` 及以上。实际验证环境为 **DSH 0.2.1-alpha.1 / `@deepseek-ai/dsh-tools` 0.2.1-alpha.1**。
-
-> ⚠️ **为什么范围要写成这样**：npm 的预发布规则是「只有范围里*某个*比较符与该版本的 `major.minor.patch` 元组完全一致、且自身带预发布标签时，该预发布版本才被放行」。而 DSH 发布到 npm 的构建**全部带预发布标签**，所以看似合理的 `>=0.1.0-rc.1 <0.3.0-0` 实际只会放行 31 个已发布 `dsh-tools` 构建中的 5 个——包括把用户自己的运行时挡在外面，`npm install` 直接 `ERESOLVE`。宿主的加载闸门用的是 `{ includePrerelease: true }`，因此这个问题**在加载时不会暴露**，只在 npm 安装路径上炸。
->
-> `test/peer-ranges.test.mjs` 会拿 `npm view <pkg> versions` 的版本清单逐个核对四条范围：对旧范围报 13 处失败，对当前范围全绿。换 harness 版本后请同步更新该文件里的清单。
+- **实时同步**：登录后订阅 SignalR WebSocket，服务器变更即时刷新；不支持 WebSocket 时自动降级轮询并定期重试升级。
+- **密码库面板**：分区导航、搜索、列表分页、条目详情、TOTP 倒计时、复制、归档/回收站与可选的写操作。
+- **脱敏模式**：工具读取到的密码、TOTP、卡号等以稳定占位符返回；需要明文时按条目 + 字段单次取回。
+- **日志擦除**：定期把会话日志中的 Bitwarden 明文替换为 `[REDACTED:BW]`，支持增量扫描与立即擦除。
+- **脱敏看板**：按天统计脱敏量，展示脱敏量前三的会话与模型；每根连接线一颗灰色粒子穿过门禁，左灰右蓝分别表示脱敏前/后；底部保留脱敏流水与详情页。
+- **安全边界**：面板走宿主已认证的 `/api` connection RPC，插件不注册自己的 HTTP 路由；主密码和 API 密钥是只写字段。
 
 ## 安装
 
 ```sh
-# 稳定地址：始终指向最新版本（市场条目用的就是它）
+# 最新稳定版（市场条目使用的地址）
 dsh plugin --profile web add https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz
 
-# 钉住某个版本
-dsh plugin --profile web add https://github.com/BuvkB/dsh-vaultwarden/releases/download/v0.8.1/dsh-vaultwarden-0.8.1.tgz
-
-# 本地路径（开发）
-dsh plugin --profile web add /absolute/path/to/dsh-vaultwarden
+# 或从 npm 安装
+dsh plugin --profile web add dsh-vaultwarden@latest
 ```
 
-装新 bundle 后可能需要重启 `dsh web` 才会加载；前端半边在页面刷新后出现。维护者发版步骤见 [docs/release.md](docs/release.md)。
+要求 Node.js >= 22。
 
-## 测试
+## 配置
+
+在 **设置 → 插件 → dsh-vaultwarden** 填写：
+
+| 字段 | 说明 |
+| --- | --- |
+| `serverUrl` / `email` | Vaultwarden 地址与登录邮箱 |
+| `masterPassword` | 主密码；只写，不落浏览器 |
+| `apiKeyClientId` / `apiKeyClientSecret` | 可选，API 密钥登录（可绕过两步验证） |
+| `accessMode` | `readonly` / `ask` / `auto`，控制模型工具的写回权限 |
+| `maskMode` / `sweepMode` | 占位符脱敏与日志擦除开关 |
+
+也支持 `DSH_BITWARDEN_*` 环境变量和 profile 组合配置。完整字段见 [docs/ui-design.md](docs/ui-design.md)。
+
+## 工具
+
+`bitwarden_find` · `bitwarden_get` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
+
+另有 `bitwarden_sweep` 立即擦除本地会话日志中的明文。
+
+## 脱敏说明
+
+- 占位符形如 `{{BW_PASSWORD_xxxxxxxx}}`，由 HMAC 生成，不可逆；只能引用、比较或按字段取回。
+- 脱敏看板与流水详情见 [docs/ui-design.md](docs/ui-design.md)。
+- 擦除标记 `[REDACTED:BW]` 表示明文曾经落盘、随后被擦除；它没有可反查的盐。
+
+## 开发
 
 ```sh
-bash scripts/build.sh    # 链接 peer 依赖 + 语法检查 + 二十三套离线测试（共 1565 项）
-# 另有两套依赖外部环境，缺失时自我跳过：test/native-row.test.mjs（宿主 primitives 路径）与 test/cli-interop.mjs（官方 bw CLI）
+bash scripts/build.sh        # 全量门禁
+node test/client-card.test.mjs
+node test/trail.test.mjs
 ```
 
-| 套件 | 覆盖 |
-| --- | --- |
-| `test/peer-ranges.test.mjs`（34） | peer 范围 vs npm 已发布构建；拒绝 0.0.1 线 / 0.3.0+ / 错误包名 |
-| `test/mock-e2e.test.mjs`（77） | 协议 / 加密 / 检索 / TOTP / 令牌刷新 / API key / 两步验证 / 分区计数与分区读取 |
-| `test/mask.test.mjs`（37） | 占位符脱敏：标签稳定性 / 条目与字段加盐 / 幂等（已是占位符不再包一层）/ 字段覆盖面（password、TOTP 码、notes、自定义字段、卡号与安全码、SSH 私钥、密码历史、SSN；句柄类保留）/ mask.key 0600 与 32 字节 / 默认路径 |
-| `test/sweeper.test.mjs`（59） | 日志擦除：合成 session.v4.jsonl.zstd 上明文消失、占位符与非 bitwarden 行逐字节不动、callId 两阶段关联（结果行不含工具名也能擦）、幂等（标记不再被重擦）、busy 会话跳过、权限与时间戳保留、无锁导出副本视为空闲、PTC 与 code-dispatch 通道、裸目录与 v3 日志、跨日志与跨轮回显猎杀；**增量与分帧**：未变日志零解码零重写、未改动帧逐字节保留、状态簿字段、整轮预算用尽时把剩余工作留给下一轮、短收割一轮不重写任何文件、重写后首帧仍恰为一行 header、assistant 副本与 tool/call 逐字节一致 |
-| `test/trail.test.mjs`（135） | 脱敏轨迹索引：**去重**（重复事件行只算一次、v3 被 v4 取代后不双计、同一次调用换上下文算两处）、**按分钟折叠**（一分钟一行、分钟内取最新时刻、两个模型两行、折叠后合计仍等于顶部数字）、**窗口一致**（流水与日桶都从日轴最早那天算起，轴前那一小时两边都不收）、**增量**（热语料零解码、追加帧只读新增、sweeper 原子重写换 inode 后从零重读而非累加、删除会话目录后记录被清）、**部分读**（预算耗尽时 pending>0 而窗口内数字仍报）、**分页**（一页 40、页数由总数算、越界页夹紧）、索引 JSON 的 `version` 与 0600、RPC 形状 |
-| `test/unmask.test.mjs`（34） | 占位符反查：标签是 `HMAC(maskKey, 条目 id + 字段名 + 值)` 的前八位，不可逆但可对解锁后的库重算，所以「这个占位符顶的是哪一条」是穷举一遍库而不是搜索。断言：真实脱敏往返后每个占位符都能反查回同一条目、十种字段（密码 / 备注 / 安全笔记 / 自定义字段 / 卡号 / 安全码 / SSH 私钥 / 密码历史 / SSN 等）各自算对标签、长备注截断到 2000 字符后仍能解析、预览只给前四位（短于八位一个字符都不给）、擦除标记与嵌套占位符不算标签、未知标签 / 空索引 / 无密钥 / 条目已删 / 种类不符全部 miss、`reprompt` 与隐藏字段不进索引 |
-| `test/trail-origin.test.mjs`（20） | 网关侧的反查组装：四类**静默 miss**（锁库 / 没有 mask key / 空库 / `reprompt` 未过门）都只让值卡退回裸占位符而不报错——反查失败是常态不是故障；索引按解锁后的 vault 对象缓存（同一对象复用、重新解锁则重建、换密钥则失效）；返回值里只有条目名与前四位，没有原值；`reprompt` 条目过了那道门之后才参与重算 |
-| `test/kdf-units.test.mjs`（13） | KDF 单位与已知向量：Argon2id 的 `kdfMemory`（MiB）必须换算成 hash-wasm 的 KiB、PBKDF2 迭代数被尊重、邮箱盐归一化；固定摘要同时锁住「正确单位」与「旧错误单位」，mock 与客户端同错时也能报警 |
-| `test/live-sync.test.mjs`（26） | WebSocket 握手 / 推送同步 / 防抖 / LogOut / 降级轮询 / 升级回退 |
-| `test/mutations.test.mjs`（44） | 写回增改删恢复 + per-item key 往返；五类条目（登录/安全笔记/信用卡/身份/SSH 密钥）的创建与更新、组织条目更新、软删/恢复/彻底删除的确认、旧版账号键条目的写回 |
-| `test/write-back.test.mjs`（49） | **P0/P1 回归**：软删端点与回收站可见性、**回收站条目排在合并列表最前**、写回字段保真（通行密钥 / 密码历史 / URI 匹配策略 / 附件 / 归档日期 / 原 key 不轮换）、并发 400 翻译、文件夹三态、归档开关、面板列表缓存 |
-| `test/cache-store.test.mjs`（74） | 密文落盘缓存的写入/权限/账号校验/7 天信任窗口 + 修订号探针快路径（探针失败退回全量、关开关不落文件）+ **并发单飞**（四个并发冷读者只下载一次、单飞结束后清空、解锁途中登出不复活会话） |
-| `test/session-resilience.test.mjs`（22） | 换令牌失败的分级：断网 / 429 / 5xx 保留会话与 refresh token 且不发密码授权，网络恢复后静默续上；只有服务器明确拒绝（`invalid_grant`）才清盘 |
-| `test/host-entry.test.mjs`（29） | Host 入口 `apply()` + Remote 网关线面（含 SRC 签名约束、`vw/draft` 的参数名与面板字段一一对应）+ 插件列表图标契约（`icon.svg` 资产、1024 画布、蓝底圆角块、白色镂空盾牌与键孔） |
-| `test/gateway-flow.test.mjs`（93） | 登录全链路：错密码 / 2FA 挑战 / 换码重试 / 会话持久化 / `vw/boot` 静默恢复与：aged token 静默换新、旧会话不被重登删掉 / **读参数透传**（归档与回收站开关真正传到后端、回收站条目要 `includeTrashed` 才能读、分区参数 `section`/`sectionValue` 真正收窄池子、`vw/overview` 计数与分区池一致、`vw/folders` 返回解析后的对象）/ 写参数透传（归档、软删、恢复走通网关）/ **编辑器全链路**（`vw/draft` 整条明文、未知 id 报 `not_found`、`update` 只改点名字段且未点名字段原样留存、写后 `sync` 读回、并发改写以 `stale_revision` 拒绝、`create` 落库可见） |
-| `test/access-mode.test.mjs`（17） | readonly / ask / auto 三档权限 |
-| `test/atomic-file.test.mjs`（20） | 落盘中间态的隐私契约：独占创建临时文件（已存在的宽权限文件永不复用）、权限随新 inode 一起生而非事后 chmod、临时名不可预测、失败不留残骸也不留半截记录 |
-| `test/client-card.test.mjs`（514） | 条目面板 + **转录行逐类脱敏**（密码/TOTP/卡号与安全码/SSH 私钥/安全笔记正文/自定义字段值逐条 NEGATIVE CONTROL；`id`/`name`/`username`/持卡人姓名/指纹/字段名照常可读；**行上不得出现任何「已隐藏 / 脱敏」提示文案**）+ **编辑器进入 drill 态**（否则窄面板上表单开在列表之下、+ 按钮像坏的）+ **齿轮是一条闭合轮廓加中心毂**（不是辐条太阳）+ 窄面板工具栏不重叠 + **工具栏图标化**（新建/设置/刷新画成 16×16 线稿而非文字，各带 title 与 aria-label，一排在手机宽度不再换行、不再把计数挤成「共 4」）+ **层级分区导航**（侧栏分区行与计数、分组标题、`aria-current`、进入分区带 `section`/`sectionValue`、**切回命中快照零 RPC**、老宿主无 `vw/overview` 时只剩「全部条目」一行、**图标是画出来的 16×16 SVG 而非字体字符**、**计数药丸保留裸数字且当前行反色**）+ **服务端图标**（命中出 `<img>`、`none` 退回首字母圆枕、**探测答回来时那一行自己重绘**）+ **验证码分区行**（3+3 分组动态码、圆环、复制）+ **写操作**（归档/移入回收站/移动到文件夹与恢复的二次确认、`readonly` 档只读说明、回收站条目要 `includeTrashed`）+ **五类条目详情**（卡片掩码、身份字段、SSH 密钥、附件与密码历史折叠区）+ 徽标手动同步 + 重开缓存 + **localStorage 快照**（重载先绘制、未登录即清）+ **旧宿主回退**（`vw/boot` 按网关错误码识别；拒绝分页参数改整表读取并被记住；满 200 上限截断改诚实提示且不再重试）+ **分页游标校准**（宿主窗口漂移不重复行、废弃列表的迟到页不回灌）+ **两处竞态回归**（换条目后迟到的「确认读取」答复不得画进新条目、被放弃查询的迟到行不得覆盖新查询也不得写进快照）（react-test-renderer + RPC 桩） |
-| `test/native-row.test.mjs`（20） | **转录行的原生路径**：通过 `test/host-primitives-hooks.mjs` 加载宿主真实的 `@deepseek-ai/dsh-client-ui-primitives`，断言行渲染在宿主的 `DisclosureRow` 上（`data-disclosure-row` / `data-disclosure-header`）、标题前有官方图标、Enter 与整行点击都能展开、展开后仍无明文、且行上没有任何脱敏提示文案。`client-card` 跑在没有 primitives 的页面上，只覆盖无 primitives 的回退分支，这条补齐用户实际会走的那条 |
+发布流程见 [docs/release.md](docs/release.md)。
 
-另有一套 `test/cli-interop.mjs`：与官方 `bw` CLI 做跨实现对照，未安装 `bw` 或 `openssl` 时自我跳过（退出码 0）。
+## 链接
 
-mock 服务端（`test/mock-server.mjs`）按 Bitwarden 协议实现了服务端半边（PBKDF2/Argon2id、HKDF、AES-CBC+HMAC、per-item key、组织密钥、SignalR hub、两步验证），可选取代官方 `bw` CLI 做跨实现对照。它的写入分支按 Vaultwarden 1.37.3 的实际语义实现：`PUT /ciphers/{id}` 整条替换、`POST /delete` 彻底删、`PUT /delete` 软删、`PUT /restore` 恢复、附件不在请求里就不动——mock 与真实服务端语义不一致时，测试会把错误当成正确固化下来（0.3.2 那次 Argon2 单位故障就是这样发生的）。设计说明见 [docs/ui-design.md](docs/ui-design.md)。
-
-## 登录与会话
-
-### 为什么要输两次（密码 + 验证码）
-
-Vaultwarden 的两步验证是**两步**：先验证主密码，再提交动态码。插件严格按这个顺序来——密码错误会停在表单并报错，**只有密码验证通过后**才进入验证码界面。
-
-### 免密登录（推荐）
-
-`sessionDays` 默认 **30 天**，且**按闲置计时**：登录一次后，令牌（含 refresh token 与派生主密钥）会加密保存在 `~/.dsh/data/dsh-vaultwarden/session.json`（权限 `0600`，仅本人可读）。期间只要用过一次密码库，有效期就自动往后滑；**闲置超过 30 天才失效**。所以正常情况下，插件重启、DSH 重启都不需要你再输密码——除非真的 30 天没用过。
-
-设为 `0` 可关闭持久化，每次都重新登录。
-
-> ⚠️ 该文件等同于主密码的保护级别：能读到它就能解密保险库。这与插件已把 `masterPassword` 存在 profile 配置里（为了能无人值守解锁）是同一权衡，官方客户端的「记住我 / PIN 解锁」也是同样取舍。
-
-### 静默恢复：开面板不再要一遍密码
-
-登录信息会**加密落盘**（`~/.dsh/data/dsh-vaultwarden/session.json`，`0600`，其中含 refresh token；access token 只有 1 小时寿命）。
-插件开面板（以及每次启动预热）时先**静默恢复**：读盘 → access token 还在 → 直接用；
-access token 过期了 → 用 refresh token 换一张新的。**全程不会自动登录，所以不会弹两步验证**。
-弹登录表单只剩三种情况：盘上真的没有会话（首次配置、登出过、或闲置超过 `sessionDays`）、
-refresh token 被服务器**明确拒绝**（换机改密等），或者磁盘上的会话文件损坏/版本不符。
-
-> 0.2.5 之前这里有两个 bug：access token 1 小时一过，面板就以为你被登出了；
-> 而「用同一套账号密码点验证并登录」会先把盘上会话删掉再登，逼着你重输密码+验证码。
-> 0.3.1 之前还有第三个：**换令牌时只要失败就删会话**——断网、429 限流、5xx 都算，
-> 于是一次网络抖动就丢掉整份会话，下次打开只能重输主密码+验证码。
-> 现在只有服务器明确拒绝（`invalid_grant` / 401）才删；网络类失败原样保留，网络一恢复就静默续上。
-> 若确实被拒绝，面板的状态接口会给出 `lastSessionLoss`，说明是哪次、为什么丢的。
-
-### 秒开：先绘制，再请求
-
-开面板时面板**先把上一次成功的列表画出来**（内存缓存 + `localStorage` 快照，5 分钟内有效），
-再向宿主要最新数据；快照只含列表本来就显示的内容（名称/类型/用户名/URI/目录/徽标），**不含密码与动态码**，
-并按「服务器 + 邮箱」绑定——换了账号不会看到别人的条目。一旦宿主报告你已登出，快照立即清除。
-宿主侧同样做了减法：开面板改为一次 `boot` RPC（配置 + 会话 + 是否恢复），列表与状态两个请求并行发出；
-插件激活时还会在后台预热会话与解密缓存，重启 dsh 后第一次开面板也不用等全量同步。
-实测（mock 服务端）：一次登录 + 两次「重启」后开面板，**0 次密码授权、0 次两步验证、0 次 refresh**，列表 4–11 ms 返回。
-列表也改为渐进加载：首屏一次只取 50 条（`PAGE_SIZE`），向下滚动自动续读下一页；只有滑得比加载快时，尾部才出现「还有 N 条，点击继续显示」按钮兜底。宿主不接受分页参数（descriptor 未声明 `offset`，网关直接拒绝）时自动回退为整表读取，上限 200 与旧版一致，且这次拒绝会被记住——下次打开直接整表读取。整表读取被上限截断时不再给出点了没有反应的按钮，而是就地提示「本机只同步到 200/总数 条，其余请在 Bitwarden 网页端查看」。续读位置以宿主报告的窗口为准：某页比请求的偏移晚到（上游新增使窗口漂移）时按宿主报告的端点续读，重复行去重后不会漏行。
-
-### 密文落盘缓存：冷启动不再全量下载
-
-0.3.0 起，每次成功同步后插件会把**服务器原样返回的密文**（gzip 后约为原体积的 1/3）写到 `~/.dsh/data/dsh-vaultwarden/vault-cache.json.gz`（权限 `0600`，原子写入）。下次冷启动先读这份缓存立刻出列表，同时用 `GET /api/accounts/revision-date` 问一次服务器（响应仅 13 字节）：
-
-- **修订号没变** → 本次启动不再下载，省掉约 660 KB 的 `/api/sync`；
-- **修订号变了** → 后台全量同步一次并刷新缓存，界面先显示旧数据、随后无缝换成新的；
-- **探针失败 / 缓存损坏 / 换了账号** → 自动退回全量下载，行为与旧版一致。
-
-两条兜底：缓存超过 **7 天**未更新时，即使探针说没变也强制全量同步一次（防上游遗漏修订号更新的边缘路径）；登出、切换账号、关掉 `localCache` 都会立即清掉缓存文件。
-
-### 通行密钥（passkey / WebAuthn）不支持
-
-Vaultwarden 的通行密钥是一种 **2FA 方式**，但它必须由**浏览器调用 `navigator.credentials` 并配合认证器上的用户手势**（指纹/面容/PIN）才能完成——这是 WebAuthn 防自动化的核心设计。插件运行在无头 Node 进程中，**没有浏览器和认证器，物理上无法完成这个仪式**，因此不支持，未来也不会支持。
-
-**替代方案**：改用 **API 密钥**登录（`apiKeyClientId` = `user.<uuid>` + `apiKeyClientSecret`）。Vaultwarden 的 API 密钥**直接绕过 2FA**（服务端 `user_api_key_login` 不调用 `twofactor_auth`），配合上面的会话持久化，基本可以做到永久免密。
-
-在面板的登录表单里把「登录方式」切到 **API 密钥**即可填写这两个字段（宿主的插件配置页同样可以填）。密钥在 Vaultwarden 网页端 **设置 → 安全 → 密钥** 获取。
-
-> 注意：API 密钥只解决**登录**，不解决**解密**——保险库是用主密码派生的密钥加密的，所以 `masterPassword` 仍然必填。API 密钥省掉的是验证码，不是主密码。
-
-## 参考与致谢
-
-本项目为独立实现，设计与实现过程中参考了以下两个 MIT 项目：
-
-| 项目 | 本项目参考之处 |
-| --- | --- |
-| [Jindom/dsh-bitwarden](https://github.com/Jindom/dsh-bitwarden) | DSH 凭据插件的最小骨架、系统提示词注入思路、mock 服务端测试方法论 |
-| [Ox0400/dsh-vault](https://github.com/Ox0400/dsh-vault) | `--dsw-alias-*` 主题 token 用法、设置页面板的视觉与交互基线 |
-
-在此致谢。两者的 MIT 许可与版权声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- [GitHub Releases](https://github.com/BuvkB/dsh-vaultwarden/releases)
+- [npm](https://www.npmjs.com/package/dsh-vaultwarden)
+- [问题反馈](https://github.com/BuvkB/dsh-vaultwarden/issues)
 
 ## 许可
 
-MIT，详见 [LICENSE](LICENSE)。
+MIT。第三方项目见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
