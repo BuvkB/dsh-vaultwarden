@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-10-28
+
+### 修复
+
+- 修复脱敏轨迹详情页「请求内容」按原始 JSON 转义显示、排版拥挤的问题。
+- 修复脱敏轨迹详情页底部无意义说明文案。
+- 修复 `@deepseek-ai/cordis` peer 依赖范围不接受 `4.0.6-alpha.1` 的问题。
+
+### 优化
+
+- 优化脱敏轨迹详情页请求内容为紧凑代码块：JSON 压成一行、标点后留空格，按面板宽度自然折行；长内容只截取掩码附近片段，左栏加宽至 1.4:1，代码块保留底色、边框和内边距。
+- 优化脱敏轨迹详情页值卡第三行与第五步文案：值卡显示「出现在 …」，第五步改为「模型回复」。
+
 ## [0.12.0] — 2026-10-27
 
 0.11.0 的流水回答「有多少处被读过」，但每一行只说得出会话与哪一分钟。这一版把行变成入口：点开看那一分钟到底发生了什么——请求里哪几段被换掉、每个占位符原来顶的是库里的哪一条、回复里有没有再出现。

@@ -477,6 +477,18 @@ const main = async () => {
   check('the value is found in every part of the exchange', one.places.join(',') === 'toolCall,toolResult,reply', JSON.stringify(one.places))
   check('the page says whether it came back out', one.reply === true, String(one.reply))
   check('every occurrence is a spot with text around it', one.spots.length === 3 && one.spots.every((spot) => typeof spot.text === 'string' && spot.text.length > 0), JSON.stringify(one.spots.length))
+  // The log is JSON, so the raw slice is double-escaped. The display form is the
+  // string value the mask actually sat in, opened up as code: braces on their
+  // own lines, two-space indent, and the same needle at an offset into it.
+  const resultSpot = one.spots.find((spot) => spot.type === 'tool/result')
+  check(
+    'the display text opens the logged JSON up, with the mask at its own offset',
+    typeof resultSpot.displayText === 'string' &&
+      resultSpot.displayText.startsWith('{') &&
+      resultSpot.displayText.includes('"password": "{{BW_PASSWORD_aaaaaaaa}}"') &&
+      resultSpot.displayText.slice(resultSpot.displayNeedleAt, resultSpot.displayNeedleAt + resultSpot.needle.length) === resultSpot.needle,
+    JSON.stringify(resultSpot.displayText),
+  )
   // The ink is a slice of the log line, not a tokenisation: the part a reader
   // wants is the key the value sat under, which a tokeniser would drop.
   const replySpot = one.spots.find((spot) => spot.type === 'assistant/message')

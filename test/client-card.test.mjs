@@ -394,8 +394,12 @@ async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
   mod.apply(ctx)
   const registration = registrations.find((candidate) => candidate.options.name === 'settings.section')
   let renderer
+  // `createNodeMock` is how a test hands a `ref` a real object to point at:
+  // react-test-renderer otherwise leaves every ref null, and the scroll memory
+  // below cannot be observed at all. The default (no option) stays null.
+  const createOptions = options.createNodeMock ? { createNodeMock: options.createNodeMock } : undefined
   await act(async () => {
-    renderer = create(registration.render({ ...registration.options.inject() }))
+    renderer = create(registration.render({ ...registration.options.inject() }), createOptions)
   })
   await act(async () => {
     await sleep(50)
@@ -3396,7 +3400,7 @@ async function main() {
     check('the first step names the minute the row showed', bodyText().includes('收到'), '')
     check('the values and the places are two different numbers', bodyText().includes('发现 2 个值') && bodyText().includes('替换 12 处'), '')
     check('the model step names the model the row named', bodyText().includes('发送模型') && bodyText().includes('workbuddy/deepseek-v4.1-flash'), '')
-    check('the last step says the value came back out', bodyText().includes('回复里又出现 1 处'), '')
+    check('the last step says the value came back out', bodyText().includes('又出现 1 处'), '')
     // The left column is a reading order, oldest first, with the mask marked.
     const ink = () => detail().findAll((node) => node.props?.['data-vw-detail-ink'] !== undefined)
     check('every occurrence is shown with the text around it', ink().length === 4, String(ink().length))
@@ -3407,11 +3411,21 @@ async function main() {
     const inkPlaces = () => ink().map((node) => node.props.children[0].props.children[0].props.children)
     check('the occurrences run oldest first', inkPlaces().join(',') === '输入,工具调用,工具结果,回复', JSON.stringify(inkPlaces()))
     check('each occurrence says when it happened', ink().every((node) => /^\d\d-\d\d \d\d:\d\d$/.test(String(node.props.children[0].props.children[1].props.children))), JSON.stringify(ink().map((node) => node.props.children[0].props.children[1].props.children)))
+    // A JSON log line must read as code — braces on their own lines, an
+    // indented key, the mask where the value was — not as one escaped strip.
+    const inkTexts = () => detail().findAll((node) => node.props?.['data-vw-detail-ink-text'] !== undefined)
+    const jsonBlock = () =>
+      inkTexts().find((node) => Array.isArray(node.props.children) && node.props.children.some((child) => typeof child === 'string' && child.includes('"password"')))
+    check(
+      'a JSON log slice is laid out as code, not line noise',
+      Boolean(jsonBlock()) && typeof jsonBlock().props.children[0] === 'string' && jsonBlock().props.children[0].includes('{"password": "'),
+      JSON.stringify(jsonBlock()?.props.children?.map?.((child) => (typeof child === 'string' ? child : '<mark>')) ?? null),
+    )
     // The right column describes each value from what the index holds.
     const valueCards = () => detail().findAll((node) => node.props?.['data-vw-detail-value'] !== undefined)
     check('each value gets its own description', valueCards().length === 2, String(valueCards().length))
     // Three lines per value: what it was, the placeholder that stood in for it,
-    // and whether it came back. The card used to carry five labelled fields
+    // and where the trace appeared. The card used to carry five labelled fields
     // (kind, how it was found, where, reply, fingerprint) and read as a wall;
     // how and where now live in the other column, and the fingerprint survives
     // only as the tooltip, since it is the page's handle rather than something
@@ -3434,7 +3448,17 @@ async function main() {
     check('a repeated value says how many spots it filled', counts().length === 1 && counts()[0].props.children === '×12', JSON.stringify(counts().map((node) => node.props.children)))
     const countsIn = (card) => card.findAll((node) => node.props?.['data-vw-detail-value-count'] !== undefined)
     check('a value replaced once has no count to say', countsIn(valueCards()[1]).length === 0, String(countsIn(valueCards()[1]).length))
-    check('the description says whether it came back', bodyText().includes('出现了') && bodyText().includes('没出现'), '')
+    // A card says where its trace appeared — the answer to "why is this on the
+    // page". It must not say "did not appear": a negative there reads as if the
+    // redaction never happened, which is exactly what a reader of a redaction
+    // log cannot be left asking.
+    const placeLines = () => detail().findAll((node) => node.props?.['data-vw-detail-places'] !== undefined)
+    check(
+      'each value card says where the trace appeared',
+      placeLines().length === 2 && placeLines()[0].props.children === '工具调用、工具结果、回复' && placeLines()[1].props.children === '输入',
+      JSON.stringify(placeLines().map((node) => node.props.children)),
+    )
+    check('no card claims something did not appear', !bodyText().includes('没出现'), '')
     // A placeholder the vault can still match comes back with the entry it stood
     // in for, so the card leads with the value's first characters and an arrow
     // into the placeholder — the reader's question is "which password was this",
@@ -3453,7 +3477,7 @@ async function main() {
     // and shows neither an arrow nor a preview — the miss has to look different
     // from the hit, or the page would be claiming a match it did not make.
     check('a marker gets no preview and no arrow', countIn(valueCards()[1], 'data-vw-detail-origin') === 0 && countIn(valueCards()[1], 'data-vw-detail-arrow') === 0)
-    check('the page states the limit out loud', bodyText().includes('条目删了、改过，或取的是验证码，就只剩占位符'), '')
+    check('the old explainer paragraph is gone', !bodyText().includes('条目删了、改过'), '')
     check('the two columns are the request text and how it was masked', bodyText().includes('请求内容') && bodyText().includes('怎么遮的'), '')
 
     // ── stepping, and coming back ──────────────────────────────────────────
@@ -3467,6 +3491,49 @@ async function main() {
     await act(async () => { detail().findAll((node) => node.props?.['data-vw-detail-back'] !== undefined)[0].props.onClick() })
     await flush(120)
     check('the back step returns to the ledger it came from', rowButtons().length === 2 && !bodyText().includes('第 1/2 条'), String(rowButtons().length))
+
+    // ── the five steps on a phone-width panel ──────────────────────────────
+    // The wide arrangement is three max-content cells, a 1fr, and a
+    // max-content. A phone panel has no spare width to give, so that 1fr
+    // resolves to zero: the model step became a 423px column of single
+    // characters and the fifth step hung off the right edge. The narrow
+    // query has to re-flow the steps, and it has to sit in the 560px block.
+    const stepsRule = '[data-vw-detail-steps] { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important; row-gap: 12px !important }'
+    check('the narrow-panel query re-flows the five steps', panelSheetText.includes(stepsRule), panelSheetText.includes(stepsRule) ? '' : 'rule missing from the injected sheet')
+    const narrowAt = panelSheetText.indexOf('@container vw-panel (max-width: 560px)')
+    const stepsAt = panelSheetText.indexOf(stepsRule)
+    const railsAt = panelSheetText.indexOf('@container vw-panel (max-width: 420px)')
+    check('the step re-flow lives in the 560px query, before the 420px one', narrowAt >= 0 && stepsAt > narrowAt && railsAt > stepsAt, 'narrow@' + narrowAt + ' steps@' + stepsAt + ' rails@' + railsAt)
+
+    // ── the ledger keeps its place ─────────────────────────────────────────
+    // One scroll container serves both pages. The detail page is shorter, so
+    // the browser clamps scrollTop to its height; coming back therefore lands
+    // wherever the clamp left it, which reads as 'the list jumped to the top'.
+    // The trail page records the offset before opening a row and restores it
+    // on the way out. react-test-renderer leaves refs null unless a test
+    // supplies createNodeMock, so this is also the only way to see it happen.
+    {
+      const boxes = []
+      const createNodeMock = (element) => {
+        const node = { scrollTop: 0, scrollHeight: 2000, clientHeight: 600 }
+        if (element && element.props && element.props['data-scroll-area'] === '') boxes.push(node)
+        return node
+      }
+      const scrollPanel = await mountPanel(mod, {}, detailRpc, { createNodeMock })
+      await flush()
+      await act(async () => { scrollPanel.renderer.root.findAll((node) => node.props?.role === 'tab')[1].props.onClick() })
+      await flush(120)
+      const scroller = boxes[boxes.length - 1]
+      check('the panel hands the trail page a scroll container to read', Boolean(scroller), String(boxes.length))
+      scroller.scrollTop = 640
+      await act(async () => { scrollPanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0].props.onClick() })
+      await flush(120)
+      check('opening a row starts the detail page at its top', scroller.scrollTop === 0, String(scroller.scrollTop))
+      await act(async () => { scrollPanel.renderer.root.findAll((node) => node.props?.['data-vw-detail-back'] !== undefined)[0].props.onClick() })
+      await flush(120)
+      check('coming back puts the ledger back where it was', scroller.scrollTop === 640, String(scroller.scrollTop))
+      await act(async () => { scrollPanel.renderer.unmount() })
+    }
 
     // ── a row whose log is gone ────────────────────────────────────────────
     // The index still holds the burst, so the numbers are real; only the text

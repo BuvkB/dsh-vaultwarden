@@ -18,7 +18,7 @@
 ```sh
 cd /home/tinyog/dsh/dsh-vaultwarden
 
-# 1. 门禁（二十三套离线测试，共 1557 项；native-row 与 cli-interop 视环境自跳过）
+# 1. 门禁（二十三套离线测试，共 1565 项；native-row 与 cli-interop 视环境自跳过）
 bash scripts/build.sh
 
 # 2. 版本号与 CHANGELOG 改好后提交、推 main
