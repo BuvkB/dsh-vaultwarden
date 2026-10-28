@@ -4,7 +4,11 @@ English | [中文](README.md)
 
 A Vaultwarden / Bitwarden integration for DeepSeek Harness. Every session can search and read the vault on demand, server changes arrive over WebSocket, requests are masked before they leave, plaintext in local session logs can be scrubbed, and **Settings → Password vault** provides the vault browser and masking dashboard.
 
-![Password vault panel](assets/panel-list.png)
+## Preview
+
+| Password vault | Masking trail |
+| --- | --- |
+| ![Password vault panel](assets/panel-list.png) | ![Masking trail page](assets/panel-trail.png) |
 
 ## Highlights
 

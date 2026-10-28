@@ -4,7 +4,11 @@
 
 把 **Vaultwarden / Bitwarden** 接入 DeepSeek Harness：每个会话都能按需检索和读取密码库；服务器变更通过 WebSocket 实时同步；请求发出前自动脱敏，落盘日志中的明文可被擦除，并在「设置 → 密码库」提供密码浏览与脱敏看板。
 
-![密码库面板](assets/panel-list.png)
+## 界面预览
+
+| 密码库面板 | 脱敏轨迹 |
+| --- | --- |
+| ![密码库面板](assets/panel-list.png) | ![脱敏轨迹页面](assets/panel-trail.png) |
 
 ## 主要能力
 
