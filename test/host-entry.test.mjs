@@ -115,6 +115,17 @@ async function main() {
     toolNames.join(','),
   )
   check('find tool describes the no-password rule', /不含密码/.test(tools.find((t) => t.name === 'bitwarden_find').description))
+  check('status tool exposes mask state and a retry warning', /maskMode/.test(tools.find((t) => t.name === 'bitwarden_status').description) && /不要连续/.test(tools.find((t) => t.name === 'bitwarden_status').description))
+  check('sync tool warns against repeated relogin', /重新登录/.test(tools.find((t) => t.name === 'bitwarden_sync').description) && /不要连续/.test(tools.find((t) => t.name === 'bitwarden_sync').description))
+  // The write tools must refuse a masked projection before they touch the
+  // network: otherwise a model can store the placeholder as the credential.
+  const createTool = tools.find((t) => t.name === 'bitwarden_create')
+  const updateTool = tools.find((t) => t.name === 'bitwarden_update')
+  const placeholder = '{{BW_PASSWORD_abc2cd34}}'
+  const createBlocked = await createTool.execute({ name: 'x', password: placeholder })
+  check('create refuses a placeholder password', /不能把脱敏占位符写回密码库/.test(createBlocked), String(createBlocked))
+  const updateBlocked = await updateTool.execute({ id: 'x', notes: placeholder })
+  check('update refuses a placeholder note', /不能把脱敏占位符写回密码库/.test(updateBlocked), String(updateBlocked))
   check('create tool requires a name', (tools.find((t) => t.name === 'bitwarden_create').parameters.required ?? []).includes('name'))
   check('injects the optional settings service it needs', injected.includes('settings'), injected.join(','))
   check('unwraps volatile config references (no "[object Object]")', (() => {

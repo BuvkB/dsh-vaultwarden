@@ -115,6 +115,30 @@ async function main() {
   check('updated password is readable', afterUpdate.password === 'rotated-pass-9')
   check('update keeps the other fields', afterUpdate.username === 'octocat@jindom.cc' && afterUpdate.notes === 'SSH 部署密钥在 CI 里')
   check('update keeps custom fields (whole-cipher replace)', afterUpdate.fields?.[1]?.value === 'tok_live_abc123', JSON.stringify(afterUpdate.fields))
+  const updatedRaw = server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-github')
+  check(
+    'password revision date is stored as a plain ISO string, not an EncString',
+    /^\d{4}-\d{2}-\d{2}T/.test(String(updatedRaw?.login?.passwordRevisionDate ?? '')),
+    String(updatedRaw?.login?.passwordRevisionDate).slice(0, 40),
+  )
+  // The model tool builds one object with every unset field as `undefined`.
+  // Those keys must mean "not supplied", not "clear this field".
+  const partial = await mutations.update(
+    'cipher-github',
+    { notes: '只改备注', name: undefined, username: undefined, password: undefined, folderId: undefined, fields: undefined, uris: undefined },
+    undefined,
+  )
+  check('partial update accepts undefined as absent', partial.updated === true, JSON.stringify(partial))
+  const afterPartial = JSON.parse(await client.get('cipher-github'))
+  check(
+    'partial update keeps name/username/password/folder and only changes notes',
+    afterPartial.name === 'GitHub 工作账号' &&
+      afterPartial.username === 'octocat@jindom.cc' &&
+      afterPartial.password === 'rotated-pass-9' &&
+      afterPartial.folder === '工作' &&
+      afterPartial.notes === '只改备注',
+    JSON.stringify(afterPartial).slice(0, 200),
+  )
 
   // The model-facing read is the narrower one: `all` withholds a hidden
   // (type 1) field's value, while the panel's own reveal keeps it so it can

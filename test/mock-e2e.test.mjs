@@ -297,6 +297,8 @@ async function main() {
   check('status explains missing configuration', status.configured === false && status.missing.length >= 2 && Boolean(status.hint))
   const okStatus = JSON.parse(await client.status())
   check('status reports reachable + unlocked + item count', okStatus.reachable === true && okStatus.unlocked === true && okStatus.items === 4, JSON.stringify(okStatus))
+  const maskStatus = JSON.parse(await new VaultClient(settingsFor(server, { maskMode: true, sweepMode: true })).status())
+  check('status reports the mask and sweep switches', maskStatus.maskMode === true && maskStatus.sweepMode === true, JSON.stringify(maskStatus))
 
   // 10. network failure --------------------------------------------------------
   const deadClient = new VaultClient(settingsFor(server, { serverUrl: 'http://127.0.0.1:1' }))

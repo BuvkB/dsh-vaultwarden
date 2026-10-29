@@ -47,7 +47,7 @@ Open **Settings → Plugins → dsh-vaultwarden**:
 
 ## Tools
 
-`bitwarden_find` · `bitwarden_get` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
+`bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
 
 `bitwarden_sweep` immediately scrubs Bitwarden plaintext from local session logs.
 

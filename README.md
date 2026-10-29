@@ -47,7 +47,7 @@ dsh plugin --profile web add dsh-vaultwarden@latest
 
 ## 工具
 
-`bitwarden_find` · `bitwarden_get` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
+`bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
 
 另有 `bitwarden_sweep` 立即擦除本地会话日志中的明文。
 

@@ -11,6 +11,8 @@ import {
   defaultMaskKeyPath,
   maskValue,
   maskProjection,
+  decorateMaskedProjection,
+  MASKED_READ_HINT,
   isPlaceholder,
   PLACEHOLDER_RE,
   tag,
@@ -83,6 +85,13 @@ check('username survives (the handle, not the secret)', projected.username === '
 // a masked projection contains none of the secrets
 const serialized = JSON.stringify(projected)
 check('no secret survives in the serialized projection', !serialized.includes(SECRET_A) && !serialized.includes(SECRET_B) && !serialized.includes('4111111111111111') && !serialized.includes('654321'))
+
+// the model-facing payload says, at the point of use, that the value is a label
+const decorated = decorateMaskedProjection(JSON.parse(serialized))
+check('a masked projection carries _masked', decorated._masked === true)
+check('a masked projection carries the reveal hint', decorated._hint === MASKED_READ_HINT && decorated._hint.includes('bitwarden_reveal'))
+const plainProjection = decorateMaskedProjection({ id: 'x', username: 'u', hasTotp: false })
+check('a plain projection is left alone', !plainProjection._masked && !plainProjection._hint)
 
 // masking is idempotent-safe: placeholders pass through a second pass untouched
 const before = JSON.stringify(projected)

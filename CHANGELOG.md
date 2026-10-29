@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] — 2026-10-29
+
+### 修复
+
+- 修复 `bitwarden_update` 未传字段时误清空条目、密码修改日期被加密、maskMode 密钥不可用时回退明文的问题。
+- 修复 sweeper 漏擦 card、fields、identity、sshKey 嵌套字段，以及与活跃日志 append 竞态丢事件的问题。
+- 修复脱敏轨迹半扫描漏计、请求数重复、详情串模型/丢指纹、索引缓存不失效的问题。
+- 修复详情切行加载态、轨迹页滚动误触密码列表分页、`bitwarden_status` 刷新绕过登录冷却的问题。
+
+### 优化
+
+- 优化 `bitwarden_get` 脱敏提示与系统提示词的失败恢复说明。
+
 ## [0.13.0] — 2026-10-29
 
 ### 新增

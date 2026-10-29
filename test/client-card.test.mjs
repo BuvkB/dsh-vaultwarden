@@ -3607,7 +3607,7 @@ async function main() {
           model: 'workbuddy/deepseek-v4.1-flash',
           count: 12,
           minutes: [{ time: at, count: 12, model: 'curi-gate/workbuddy/deepseek-v4.1-flash' }],
-          values: [],
+          values: [{ fingerprint: 'PASSWORD:abcdefgh', count: 12, kind: 'PASSWORD', places: [], reply: false, firstAt: null, spots: [] }],
           log: { missing: true, truncated: false, windowFrom: at, windowTo: at + 60000 },
         },
       }),
@@ -3619,9 +3619,9 @@ async function main() {
     await act(async () => { gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0].props.onClick() })
     await flush(120)
     const goneText = () => JSON.stringify(gonePanel.renderer.toJSON())
-    check('a row with no log still shows its numbers', goneText().includes('完成 12 处脱敏') && goneText().includes('识别 0 个敏感值'), '')
+    check('a row with no log still shows its numbers', goneText().includes('完成 12 处脱敏') && goneText().includes('识别 1 个敏感值'), '')
     check('a missing log is said, not shown as an empty column', goneText().includes('对应的会话日志已经不在了，只剩下指纹'), '')
-    check('an empty value column is said too', goneText().includes('没有可显示的值'), '')
+    check('a fingerprint-only value card is shown', goneText().includes('data-vw-detail-value') && goneText().includes('密码') && !goneText().includes('没有可显示的值'), '')
     check('the row still steps back to the ledger', gonePanel.renderer.root.findAll((node) => node.props?.['data-vw-trail-row'] !== undefined).length === 0, '')
     await act(async () => { gonePanel.renderer.unmount() })
   }

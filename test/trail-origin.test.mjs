@@ -43,7 +43,7 @@ const DOTS = '••••••…'
 
 /** A gateway built from the prototype, wired like the host does it. */
 function makeGateway(options) {
-  const state = { unlockCalls: 0, vault: options.vault }
+  const state = { unlockCalls: 0, vault: options.vault, vaultVersion: 0 }
   const client = {
     unlock: async () => {
       state.unlockCalls++
@@ -51,6 +51,10 @@ function makeGateway(options) {
       return state.vault
     },
     repromptGrantedFor: options.granted ? (id) => options.granted.includes(id) : undefined,
+    now: () => Date.now(),
+    get vaultVersion() {
+      return state.vaultVersion
+    },
   }
   const gateway = Object.create(VaultGateway.prototype)
   gateway.getClient = () => client
@@ -119,6 +123,16 @@ async function main() {
     const third = await gateway.maskIndex()
     check('a new vault object rebuilds the index', third !== first && third.size > 0, String(state.unlockCalls))
     check('the rebuilt index no longer answers for the old value', lookupFingerprint(third, FINGERPRINT) === null, JSON.stringify(lookupFingerprint(third, FINGERPRINT)))
+  }
+
+  // -- an in-place cipher edit invalidates the cached index ----------------
+  {
+    const { gateway, state } = makeGateway({ vault: { items: [ENTRY] } })
+    const first = await gateway.maskIndex()
+    state.vault.items[0] = { ...ENTRY, password: 'changed-in-place' }
+    state.vaultVersion += 1
+    const changed = await gateway.maskIndex()
+    check('an in-place cipher edit rebuilds the index', changed !== first && lookupFingerprint(changed, FINGERPRINT) === null, String(state.vaultVersion))
   }
 
   // -- a rotated mask key must not answer with the cached index ---------

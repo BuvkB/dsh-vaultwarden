@@ -50,6 +50,9 @@ const dayOf = (ms) => {
 const titleLine = (time, title) => JSON.stringify({ type: 'session/title', seq: 5, time, data: { title } })
 const modelLine = (time, provider, model) => JSON.stringify({ type: 'model/selection', seq: 6, time, data: { provider, model } })
 const headerLine = (time, provider = 'curi-gate', model = 'zcode/GLM-5.3') => JSON.stringify({ type: 'request/header', seq: 7, time, data: { header: { config: { provider, model } } } })
+// The host writes request/header and request/context for the SAME request,
+// adjacent seq and about 1 ms apart; the request count must not double.
+const contextLine = (time, provider = 'curi-gate', model = 'zcode/GLM-5.3') => JSON.stringify({ type: 'request/context', seq: 8, time, data: { provider, model } })
 const maskLine = (time, callId, kind, tag) =>
   JSON.stringify({
     type: 'tool/result',
@@ -93,6 +96,7 @@ const main = async () => {
     titleLine(NOW - 4000000, '会话甲'),
     modelLine(NOW - 3900000, 'curi-gate', 'zcode/GLM-5.3'),
     headerLine(NOW - 3700000),
+    contextLine(NOW - 3699900),
     alphaMask,
     maskLine(NOW - 3500000, 'c2', 'TOTP', 'bcdefghi'),
     alphaMask,
@@ -130,7 +134,7 @@ const main = async () => {
   // v5 carries the fingerprints a row counted. Without them a ledger row
   // is only a session name and a minute, and opening the detail page would
   // have to re-derive which values were behind it from a log that may be gone.
-  check('the index version is the one that stores row fingerprints', INDEX_VERSION === 6, String(INDEX_VERSION))
+  check('the index version is the one that stores row fingerprints', INDEX_VERSION === 7, String(INDEX_VERSION))
 
   const state = index._load()
   check('the index keeps one record per session directory', Object.keys(state.files).length === 4, JSON.stringify(Object.keys(state.files)))
@@ -297,6 +301,15 @@ const main = async () => {
   const partialReport = aggregateTrail(slow._load(), { days: 7, now: NOW })
   check('a partial index is marked in the report', partialReport.index.pending > 0, JSON.stringify(partialReport.index))
   check('a partial index still shows the numbers it has', partialReport.total >= 0, String(partialReport.total))
+  // The next refresh must resume from the offset that stopped mid-file, not
+  // mistake the recorded file size for "already scanned".
+  const resumed = await slow.refresh({ budgetMs: 60000 })
+  check('a budget-stopped scan resumes to EOF', resumed.pending === 0, JSON.stringify(resumed))
+  check(
+    'the resumed scan has every mask the full scan had',
+    aggregateTrail(slow._load(), { days: 7, now: NOW }).total === week.total,
+    String(aggregateTrail(slow._load(), { days: 7, now: NOW }).total),
+  )
 
   // ── the RPC ────────────────────────────────────────────────────────────────
   resetTrailIndex()
@@ -429,6 +442,23 @@ const main = async () => {
   const foldState = foldIndex._load()
   check('two models in one minute keep two rows', bunchRecord().rows.length === 2, JSON.stringify(bunchRecord().rows.map((row) => row.m)))
   check('the second model line carries only its own masks', bunchRecord().rows.filter((row) => row.m === 'stepfun/step-5-preview')[0]?.n === 1, JSON.stringify(bunchRecord().rows))
+  // Opening one model's row must not include the other model's value from the
+  // same minute: `trailRow` already carries the burst's fingerprints.
+  const foldAgg = aggregateTrail(foldState, { days: 7, now: NOW })
+  const curiDetailRow = foldAgg.rows.find((row) => row.session === 'session-bunch' && row.provider === 'curi-gate' && row.model === 'zcode/GLM-5.3')
+  const twoModelDetail = await trailRowDetail({
+    sessionsRoot: foldRoot,
+    path: join(root, 'fold-index.json'),
+    now: () => NOW,
+    days: 7,
+    session: curiDetailRow.session,
+    time: curiDetailRow.time,
+  })
+  check(
+    'a two-model minute opens only the clicked model\'s values',
+    twoModelDetail.ok === true && twoModelDetail.values.length === 1 && twoModelDetail.values[0].kind === 'PASSWORD',
+    JSON.stringify(twoModelDetail.values.map((value) => value.fingerprint)),
+  )
 
   // And a folded log still reconciles with itself: the rows of the window add
   // up to that window's headline, which is the property the ledger is read for.
@@ -591,7 +621,11 @@ const main = async () => {
   const goneLog = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: detailRow.session, time: detailRow.time })
   check('a deleted log degrades to the fingerprints, not an error', goneLog.ok === true && goneLog.log.missing === true, JSON.stringify(goneLog.log))
   check('the numbers survive their log', goneLog.count === detailRow.count && goneLog.minutes.length === 1, JSON.stringify({ count: goneLog.count, minutes: goneLog.minutes }))
-  check('with no log there is no ink to show', goneLog.values.length === 0, JSON.stringify(goneLog.values))
+  check(
+    'with no log the fingerprints and their counts still come back',
+    goneLog.values.length === 1 && goneLog.values[0].count === 2 && goneLog.values[0].spots.length === 0,
+    JSON.stringify(goneLog.values),
+  )
   const notFound = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: detailRow.session, time: NOW - 12345 })
   check('a row that was never folded answers not-found', notFound.ok === false && notFound.reason === 'not-found', JSON.stringify(notFound))
   const noSuch = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: 'session-nobody', time: detailRow.time })

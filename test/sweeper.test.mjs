@@ -125,6 +125,28 @@ try {
   check('session header line survives', after.includes('"type":"session"'))
   check('permissions are preserved across the rewrite', (statSync(idleLog).mode & 0o777) === 0o640)
 
+  // Write tools carry card/identity/sshKey/fields as JSON STRINGS. The old
+  // redactor only parsed arguments/text/content and treated only the named
+  // top-level keys as secret, so these values survived the sweep.
+  const nestedCard = '4111111111111111'
+  const nestedToken = 'tok_live_nested_9'
+  const nestedSsn = '123-45-6789'
+  const nestedKey = '-----BEGIN PRIVATE KEY-----'
+  const nestedLog = makeSession(root, 'ddd', [
+    sessionHeader,
+    toolCall('bitwarden_create', {
+      name: 'nested',
+      card: JSON.stringify({ number: nestedCard, code: '321' }),
+      identity: JSON.stringify({ ssn: nestedSsn }),
+      sshKey: JSON.stringify({ privateKey: nestedKey }),
+      fields: JSON.stringify([{ name: 'api', value: nestedToken, type: 1 }]),
+    }),
+    toolResult(JSON.stringify({ fields: [{ name: 'api', value: nestedToken, type: 1 }] })),
+  ])
+  await sweepLog(nestedLog, { skipIdleCheck: true, ...OPTS })
+  const nestedAfter = zstdDecompress(readFileSync(nestedLog))
+  check('write-tool card/identity/sshKey/fields strings are swept', !nestedAfter.includes(nestedCard) && !nestedAfter.includes(nestedSsn) && !nestedAfter.includes(nestedKey) && !nestedAfter.includes(nestedToken))
+
   // ── advertised-copy sync (the second corruption class) ─────────────────────
   // The host replays both copies of a tool call and requires byte equality;
   // a sweep that rewrites only tool/call leaves disagreeing copies and the
@@ -274,6 +296,7 @@ try {
   const crossReport = await sweepAll(root, OPTS)
   check('sweepAll hunts cross-log echoes', !zstdDecompress(readFileSync(dstLog)).includes(SECRET_PW))
   check('sweepAll reports harvested values', crossReport.harvested > 0, JSON.stringify(crossReport))
+  check('the cross-round seed store is private', (statSync(OPTS.seedPath).mode & 0o777) === 0o600, (statSync(OPTS.seedPath).mode & 0o777).toString(8))
   check('cross-log sweep is idempotent', (await sweepAll(root, OPTS)).redactedFiles === 0)
 
   // ── incrementality: a settled log is not read again ────────────────────
