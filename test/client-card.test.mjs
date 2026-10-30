@@ -3473,9 +3473,9 @@ async function main() {
     // a reader can act on.
     const cardLines = (node) => node.children.filter((child) => typeof child !== 'string')
     const countIn = (node, prop) => node.findAll((child) => child.props?.[prop] !== undefined).length
-    check('each value card is three lines, not a field wall', valueCards().every((node) => cardLines(node).length === 3), JSON.stringify(valueCards().map((node) => cardLines(node).length)))
+    check('each value card stays compact, and a marker adds exactly one explanation line', valueCards().every((node, i) => cardLines(node).length === (i === 0 ? 3 : 4)), JSON.stringify(valueCards().map((node) => cardLines(node).length)))
     const kinds = () => detail().findAll((node) => node.props?.['data-vw-detail-kind'] !== undefined)
-    check('a value names its field in words', kinds()[0].props.children === '敏感类型：密码' && kinds()[1].props.children === '敏感类型：脱敏占位符', JSON.stringify(kinds().map((node) => node.props.children)))
+    check('a value names its field in words', kinds()[0].props.children === '敏感类型：密码' && kinds()[1].props.children === '敏感类型：脱敏标记', JSON.stringify(kinds().map((node) => node.props.children)))
     check('the field is named once, with no label in front of it', !bodyText().includes('发现方式') && !bodyText().includes('查找方式'), '')
     const codes = () => detail().findAll((node) => node.type === 'code')
     check('the placeholder is shown as it stood in the text', codes()[0].props.children === '{{BW_PASSWORD_7kzaipdf}}' && codes()[1].props.children === '[REDACTED:BW_PASSWORD]', JSON.stringify(codes().map((node) => node.props.children)))
@@ -3518,6 +3518,16 @@ async function main() {
     // and shows neither an arrow nor a preview — the miss has to look different
     // from the hit, or the page would be claiming a match it did not make.
     check('a marker gets no preview and no arrow', countIn(valueCards()[1], 'data-vw-detail-origin') === 0 && countIn(valueCards()[1], 'data-vw-detail-arrow') === 0)
+    // A marker is not a placeholder: it is what the log sweep left of a value
+    // that used to be there. The card says so in one line, and only on markers.
+    const markerHints = () => detail().findAll((node) => node.props?.['data-vw-detail-marker-hint'] !== undefined)
+    check(
+      'a marker explains that the original value was erased',
+      markerHints().length === 1 &&
+        markerHints()[0].props.children === '原值已被日志擦除，这里显示的是擦除标记。' &&
+        countIn(valueCards()[0], 'data-vw-detail-marker-hint') === 0,
+      JSON.stringify(markerHints().map((node) => node.props.children)),
+    )
     check('the old explainer paragraph is gone', !bodyText().includes('条目删了、改过'), '')
     check('the two columns are the request text and how it was masked', bodyText().includes('请求内容') && bodyText().includes('脱敏明细'), '')
 

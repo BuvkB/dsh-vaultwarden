@@ -223,7 +223,8 @@ try {
   ])
   const ptc = await sweepLog(ptcLog)
   const ptcAfter = zstdDecompress(readFileSync(ptcLog))
-  check('ptc-dispatch result plaintext is swept', ptc.status === 'redacted' && ptcAfter.includes('[REDACTED:BW]'), JSON.stringify(ptc))
+  check('ptc-dispatch result plaintext is swept (kinded)', ptc.status === 'redacted' && ptcAfter.includes('[REDACTED:BW_PASSWORD]'), JSON.stringify(ptc))
+  check('swept markers carry their kind', ptcAfter.includes('[REDACTED:BW_VALUE]'), 'totp.code sweeps as the generic VALUE class')
   check('ptc-dispatch-start arguments are swept', !ptcAfter.includes(SECRET_PW))
   check('ptc totp code is swept', !ptcAfter.includes(SECRET_TOTP))
   check('ptc sweep is idempotent', (await sweepLog(ptcLog)).status === 'clean')
@@ -265,8 +266,22 @@ try {
   await sweepLog(echoLog)
   const echoAfter = zstdDecompress(readFileSync(echoLog))
   check('run_code aggregate echo of a harvested secret is swept', !echoAfter.includes(SECRET_PW), echoAfter.slice(0, 200))
-  check('echo replacement uses the marker', echoAfter.includes('password is [REDACTED:BW]'))
+  check('echo replacement uses the marker (kinded)', echoAfter.includes('password is [REDACTED:BW_PASSWORD]'))
   check('echo sweep is idempotent', (await sweepLog(echoLog)).status === 'clean')
+
+  // ── legacy bare markers are final ─────────────────────────────────────────
+  // A log swept by an older build carries [REDACTED:BW] with no kind. A
+  // re-sweep must leave it byte-identical — and never harvest the marker
+  // itself as a "secret" (the echo hunt used to quote it wherever it went).
+  const legacyLog = makeSession(root, 'hhh', [
+    sessionHeader,
+    toolCall('bitwarden_get', { name: 'n', field: 'password' }),
+    toolResult(JSON.stringify({ password: '[REDACTED:BW]' })),
+  ])
+  const legacy = await sweepLog(legacyLog)
+  const legacyAfter = zstdDecompress(readFileSync(legacyLog))
+  check('a legacy bare marker survives a re-sweep untouched', legacy.redacted === 0 && legacyAfter.includes('[REDACTED:BW]'), JSON.stringify(legacy) + ' | ' + legacyAfter.slice(0, 200))
+  check('a legacy marker is not harvested as a secret', Array.isArray(legacy.harvested) && !legacy.harvested.includes('[REDACTED:BW]'), JSON.stringify(legacy.harvested))
 
   // a log with no bitwarden events harvests nothing on its own, so a bare
   // per-log sweepLog does not hunt there; cross-log hunting is sweepAll's
@@ -298,6 +313,53 @@ try {
   check('sweepAll reports harvested values', crossReport.harvested > 0, JSON.stringify(crossReport))
   check('the cross-round seed store is private', (statSync(OPTS.seedPath).mode & 0o777) === 0o600, (statSync(OPTS.seedPath).mode & 0o777).toString(8))
   check('cross-log sweep is idempotent', (await sweepAll(root, OPTS)).redactedFiles === 0)
+
+  // ── the seed store ages out ─────────────────────────────────────────────
+  // A harvested value is kept only to recognise the same plaintext in a log
+  // that was busy when it was learned. That window is days: after it, the
+  // entry is dead weight and a plaintext liability, so a round must drop it.
+  const ttlRoot = mkdtempSync(join(tmpdir(), 'bw-sweep-ttl-'))
+  try {
+    const ttlSeed = join(ttlRoot, 'swept-secrets.json')
+    const ttlState = join(ttlRoot, 'sweep-state.json')
+    const nowMs = Date.now()
+    writeFileSync(
+      ttlSeed,
+      JSON.stringify({
+        version: 2,
+        values: [
+          { v: 'fresh-value-123', at: nowMs - 86400000 },
+          { v: 'expired-value-456', at: nowMs - 40 * 86400000 },
+        ],
+      }),
+      { mode: 0o600 },
+    )
+    makeSession(ttlRoot, 'ttl', [sessionHeader, toolCall('bitwarden_find', { query: 'x' }), toolResult('[]')])
+    await sweepAll(ttlRoot, { statePath: ttlState, seedPath: ttlSeed })
+    const ttlAfter = JSON.parse(readFileSync(ttlSeed, 'utf8'))
+    const kept = ttlAfter.values.map((entry) => entry.v)
+    check(
+      'a seed past its TTL is dropped, a fresh one kept',
+      ttlAfter.version === 2 && kept.includes('fresh-value-123') && !kept.includes('expired-value-456'),
+      JSON.stringify(ttlAfter),
+    )
+
+    // A store written by an older build is a bare list with no timestamps of
+    // its own; its mtime is the only age it carries. It must both age out and
+    // be rewritten in the timestamped shape (so the next round can age it).
+    writeFileSync(ttlSeed, JSON.stringify({ version: 1, values: ['legacy-secret-789'] }), { mode: 0o600 })
+    const aged = new Date(nowMs - 45 * 86400000)
+    utimesSync(ttlSeed, aged, aged)
+    await sweepAll(ttlRoot, { statePath: ttlState, seedPath: ttlSeed })
+    const legacyAfter = JSON.parse(readFileSync(ttlSeed, 'utf8'))
+    check(
+      'a legacy bare-list store ages out by its own mtime and is rewritten as v2',
+      legacyAfter.version === 2 && legacyAfter.values.length === 0,
+      JSON.stringify(legacyAfter),
+    )
+  } finally {
+    rmSync(ttlRoot, { recursive: true, force: true })
+  }
 
   // ── incrementality: a settled log is not read again ────────────────────
   // The whole point of the state book: a round must cost work proportional to

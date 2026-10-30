@@ -53,19 +53,38 @@ const headerLine = (time, provider = 'curi-gate', model = 'zcode/GLM-5.3') => JS
 // The host writes request/header and request/context for the SAME request,
 // adjacent seq and about 1 ms apart; the request count must not double.
 const contextLine = (time, provider = 'curi-gate', model = 'zcode/GLM-5.3') => JSON.stringify({ type: 'request/context', seq: 8, time, data: { provider, model } })
+// A masked vault result in the shape the PTC host actually writes: the tool
+// NAME rides on the event itself (`data.name`), which is the positive
+// allowlist the index counts by. A bare tool/result with no such name is text,
+// however much it looks like a mask.
 const maskLine = (time, callId, kind, tag) =>
+  JSON.stringify({
+    type: 'tool/ptc-dispatch',
+    seq: 3,
+    time,
+    data: { name: 'bitwarden_get', subCallId: callId, isError: false, content: [{ type: 'text', text: JSON.stringify({ password: '{{BW_' + kind + '_' + tag + '}}', _masked: true }) }] },
+  })
+/** The classic (non-PTC) shape: a tool/result carries only a call id, so the
+ *  index resolves it against the bitwarden_* call it saw earlier in the log. */
+const classicMaskLine = (time, callId, kind, tag) =>
   JSON.stringify({
     type: 'tool/result',
     seq: 3,
     time,
-    data: { turn: 1, step: 1, callId, message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: JSON.stringify({ password: '{{BW_' + kind + '_' + tag + '}}' }) }] } },
+    data: { turn: 1, step: 1, callId, message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: JSON.stringify({ password: '{{BW_' + kind + '_' + tag + '}}', _masked: true }) }] } },
   })
+// The shape the sweeper leaves behind: a marker as the whole value of a
+// credential key in a vault event, with varying text nearby for the context
+// fingerprint.
 const markerLine = (time, callId, context) =>
-  JSON.stringify({ type: 'user/message', seq: 8, time, data: { callId, message: { role: 'user', content: [{ type: 'text', text: context + ' [REDACTED:BW_PASSWORD]' }] } } })
+  JSON.stringify({ type: 'tool/ptc-dispatch', seq: 8, time, data: { name: 'bitwarden_reveal', subCallId: callId, isError: false, content: [{ type: 'text', text: JSON.stringify({ note: context, password: '[REDACTED:BW_PASSWORD]' }) }] } })
+const legacyMaskLine = (time, callId, kind, tag) => maskLine(time, callId, kind, tag)
 const plainLine = (time) => JSON.stringify({ type: 'user/message', seq: 9, time, data: { message: { role: 'user', content: [{ type: 'text', text: 'no secrets in this one' }] } } })
-/** A tool call carrying a placeholder: the request side of the exchange. */
+/** A tool call carrying a placeholder: the request side of the exchange. The
+ *  call must name a bitwarden_* tool — placeholders elsewhere in a call are
+ *  the model quoting the pattern, not the vault exchange. */
 const callLine = (time, callId, note) =>
-  JSON.stringify({ type: 'tool/call', seq: 4, time, data: { callId, message: { role: 'assistant', content: [{ type: 'toolCall', callId, name: 'web_fetch', arguments: { note } }] } } })
+  JSON.stringify({ type: 'tool/call', seq: 4, time, data: { turn: 1, step: 1, callId, name: 'bitwarden_get', arguments: JSON.stringify({ note }) } })
 /** A reply carrying the same placeholder back out: the "did it come back" side. */
 const replyLine = (time, text) => JSON.stringify({ type: 'assistant/message', seq: 5, time, data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } })
 
@@ -134,7 +153,7 @@ const main = async () => {
   // v5 carries the fingerprints a row counted. Without them a ledger row
   // is only a session name and a minute, and opening the detail page would
   // have to re-derive which values were behind it from a log that may be gone.
-  check('the index version is the one that stores row fingerprints', INDEX_VERSION === 7, String(INDEX_VERSION))
+  check('the index version is the one that counts by the positive vault allowlist', INDEX_VERSION === 9, String(INDEX_VERSION))
 
   const state = index._load()
   check('the index keeps one record per session directory', Object.keys(state.files).length === 4, JSON.stringify(Object.keys(state.files)))
@@ -279,6 +298,50 @@ const main = async () => {
   const pruned = await index.refresh({ budgetMs: 60000 })
   check('a deleted session stops being indexed', !Object.keys(index._load().files).some((key) => key.includes('session-dedup')), JSON.stringify(Object.keys(index._load().files)))
   check('a deleted session leaves the totals', aggregateTrail(index._load(), { days: 7, now: NOW }).total === week.total, String(aggregateTrail(index._load(), { days: 7, now: NOW }).total))
+
+  // ── the gate: markers that are text, not sweeps ───────────────────────────
+  // The pattern also appears where no sweep put it — the system prompt's own
+  // tool descriptions, prose quoting the marker, a source file read into the
+  // log — and counting those made the ledger mostly fiction. None of them may
+  // move the totals.
+  const proseLine = (time) =>
+    JSON.stringify({ type: 'user/message', seq: 8, time, data: { message: { role: 'user', content: [{ type: 'text', text: 'the sweeper writes [REDACTED:BW_PASSWORD] into logs' }] } } })
+  const promptLine = (time) =>
+    JSON.stringify({ type: 'system/message', seq: 8, time, data: { message: { role: 'system', content: [{ type: 'text', text: 'bitwarden_sweep: Record<string, JsonValue> — password/totp/卡号等 → [REDACTED:BW_PASSWORD]' }] } } })
+  const looseLine = (time) =>
+    JSON.stringify({ type: 'tool/result', seq: 8, time, data: { callId: 'd4', message: { role: 'tool', toolCallId: 'd4', content: [{ type: 'text', text: 'the sweeper writes [REDACTED:BW_PASSWORD] here' }] } } })
+  const unknownLine = (time) =>
+    JSON.stringify({ type: 'tool/result', seq: 8, time, data: { callId: 'd5', message: { role: 'tool', toolCallId: 'd5', content: [{ type: 'text', text: JSON.stringify({ password: '[REDACTED:BW_BOGUS]' }) }] } } })
+  // Placeholders get the same gate: a report ABOUT masking quoting one as an
+  // example — the 10-28 case the user flagged, four ledger spots from one
+  // sentence — rides a bash dispatch that names no bitwarden tool, and an
+  // assistant echo of the handle is not a second mask.
+  const bashDispatchLine = (time) =>
+    JSON.stringify({ type: 'tool/ptc-dispatch', seq: 8, time, data: { name: 'bash', content: [{ type: 'text', text: 'a report quoting {"password": "{{BW_PASSWORD_vfvyvkan}}"} as an example' }] } })
+  // The 10-30 leak, exactly: a bash dispatch whose ARGUMENTS are a probe
+  // script containing both the literal "name":"bitwarden_get" and a
+  // placeholder. A string-matching gate saw the tool name and counted it; the
+  // structural one reads data.name === 'bash' and counts nothing.
+  const probeScriptLine = (time) =>
+    JSON.stringify({ type: 'tool/ptc-dispatch', seq: 8, time, data: { name: 'bash', content: [{ type: 'text', text: 'const bwDispatch = JSON.stringify({ type: "tool/ptc-dispatch", data: { name: "bitwarden_get", content: [{ type: "text", text: JSON.stringify({ password: "{{BW_PASSWORD_zzzzzzzz}}" }) }] } })' }] } })
+  const echoLine = (time) =>
+    JSON.stringify({ type: 'assistant/message', seq: 8, time, data: { message: { role: 'assistant', content: [{ type: 'text', text: 'the reply echoed {{BW_PASSWORD_vfvyvkan}} back' }] } } })
+  await writeLog('ws', 'session-gate', 4, [
+    titleLine(NOW - 400, '会话闸'),
+    proseLine(NOW - 390),
+    promptLine(NOW - 380),
+    looseLine(NOW - 370),
+    unknownLine(NOW - 360),
+    bashDispatchLine(NOW - 355),
+    probeScriptLine(NOW - 350),
+    echoLine(NOW - 345),
+  ], NOW - 350)
+  await index.refresh({ budgetMs: 60000 })
+  const gateAgg = aggregateTrail(index._load(), { days: 7, now: NOW })
+  check('markers and placeholders that are text (prose, prompt, unkeyed, unknown kind, quoted examples, echo) count nothing', gateAgg.total === week.total, String(gateAgg.total) + ' vs ' + week.total)
+  // ...then the gate session leaves again, so the persistence counts below hold
+  rmSync(join(root, 'sessions', 'ws', 'session-gate'), { recursive: true, force: true })
+  await index.refresh({ budgetMs: 60000 })
 
   // ── persistence ───────────────────────────────────────────────────────────
   const saved = JSON.parse(readFileSync(indexPath, 'utf8'))
@@ -494,7 +557,7 @@ const main = async () => {
       modelLine(NOW - 89000, 'curi-gate', 'zcode/GLM-5.3'),
       headerLine(NOW - 88000),
       callLine(NOW - 60000, 'k1', 'the apiKey is {{BW_PASSWORD_aaaaaaaa}} and it is long'),
-      maskLine(NOW - 55000, 'k1', 'PASSWORD', 'aaaaaaaa'),
+      classicMaskLine(NOW - 55000, 'k1', 'PASSWORD', 'aaaaaaaa'),
       replyLine(NOW - 50000, 'the key came back as {{BW_PASSWORD_aaaaaaaa}} in the reply'),
     ],
     NOW - 10000,
@@ -507,7 +570,9 @@ const main = async () => {
   const detailAgg = aggregateTrail(detailIndex._load(), { days: 7, now: NOW })
   const detailRow = detailAgg.rows.find((row) => row.session === 'session-detail')
   check('the detail corpus has a row to open', Boolean(detailRow), JSON.stringify(detailAgg.rows.map((row) => row.session)))
-  check('the same value in a call and its result counts once', detailRow.count === 2, JSON.stringify(detailRow))
+  // The call and its result are one exchange: the dedup folds them into a
+  // single spot, and the reply no longer adds a count of its own.
+  check('the vault exchange counts once — call and deduped result', detailRow.count === 1, JSON.stringify(detailRow))
 
   resetTrailIndex()
   const detail = await trailRowDetail({
@@ -520,7 +585,7 @@ const main = async () => {
   })
   check('the detail page opens the row the ledger showed', detail.ok === true && detail.session === 'session-detail' && detail.time === detailRow.time, JSON.stringify({ ok: detail.ok, time: detail.time, row: detailRow.time }))
   check('the detail page repeats the row\'s own numbers', detail.count === detailRow.count && detail.name === detailRow.name && detail.model === detailRow.model, JSON.stringify(detail))
-  check('the detail page lists the minutes the burst swallowed', detail.minutes.length === 1 && detail.minutes[0].count === 2, JSON.stringify(detail.minutes))
+  check('the detail page lists the minutes the burst swallowed', detail.minutes.length === 1 && detail.minutes[0].count === 1, JSON.stringify(detail.minutes))
   check('one value, however often it was counted', detail.values.length === 1, JSON.stringify(detail.values.map((value) => value.fingerprint)))
   const one = detail.values[0]
   check('the placeholder names its kind', one.kind === 'PASSWORD', one.kind)
@@ -623,7 +688,7 @@ const main = async () => {
   check('the numbers survive their log', goneLog.count === detailRow.count && goneLog.minutes.length === 1, JSON.stringify({ count: goneLog.count, minutes: goneLog.minutes }))
   check(
     'with no log the fingerprints and their counts still come back',
-    goneLog.values.length === 1 && goneLog.values[0].count === 2 && goneLog.values[0].spots.length === 0,
+    goneLog.values.length === 1 && goneLog.values[0].count === 1 && goneLog.values[0].spots.length === 0,
     JSON.stringify(goneLog.values),
   )
   const notFound = await trailRowDetail({ sessionsRoot: detailRoot, path: detailIndexPath, now: () => NOW, days: 7, session: detailRow.session, time: NOW - 12345 })
