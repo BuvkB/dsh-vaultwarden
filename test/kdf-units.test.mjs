@@ -16,7 +16,7 @@
  *
  * Run: node test/kdf-units.test.mjs
  */
-import { pbkdf2Sync } from 'node:crypto'
+import { createHash, pbkdf2Sync } from 'node:crypto'
 import { deriveMasterKey } from '../lib/vault.js'
 import { EMAIL as MOCK_EMAIL, PASSWORD as MOCK_PASSWORD, serverMasterKey } from './mock-server.mjs'
 
@@ -24,10 +24,12 @@ const PASSWORD = 'correct horse battery staple'
 const EMAIL = 'user@example.com'
 /** 64 MiB, 3 passes, 4 lanes — the shape a Vaultwarden prelogin reports. */
 const ARGON2_DESCRIPTOR = { kdf: 1, kdfIterations: 3, kdfMemory: 64, kdfParallelism: 4 }
-/** Argon2id(PASSWORD, EMAIL, m=64 MiB, t=3, p=4), hex. */
-const ARGON2_MIB_HEX = 'ecac1f67fed26d11ec06663d9f2b410a68d86d4a92d008429260143d6e1da507'
+/** The official Argon2id salt is SHA-256 of the lowercased email (sdk-internal kdf.rs). */
+const ARGON2_SALT = createHash('sha256').update(EMAIL, 'utf8').digest()
+/** Argon2id(PASSWORD, SHA256(EMAIL), m=64 MiB, t=3, p=4), hex — the official derivation. */
+const ARGON2_MIB_HEX = '26034d0eaf9c2631caec3e6cc7f47603bee30bf3d86f8d79968d05fa3245f702'
 /** The same inputs read as 64 KiB — the old, wrong unit. */
-const ARGON2_KIB_HEX = '7fe8f9ea6ff3a86816a80ed7be4685d45b280bfaa6aa726fbeea33969c45e278'
+const ARGON2_KIB_HEX = '19f61fc78036d277999d8279f6b0651a072e8062622b6bc71f74f95815b455a6'
 /** PBKDF2-SHA256(PASSWORD, EMAIL, 600000), hex. */
 const PBKDF2_600K_HEX = '55dc4a94e4881ffd792d6cb4173d7145756cd95ddc9b2310bb0fc931123c8248'
 /** PBKDF2-SHA256(PASSWORD, EMAIL, 1000), hex. */
@@ -66,11 +68,22 @@ console.log('kdf units test')
   check('the salt is the trimmed, lowercased email', messy.toString('hex') === PBKDF2_1K_HEX, messy.toString('hex'))
 }
 
+// ── password bytes are used as-is (no NFKC) ──────────────────────────────────
+{
+  // NFKC folds ａｂｃ to abc; official clients derive from the raw UTF-8 bytes.
+  const fullwidth = 'ａｂｃ'
+  const raw = pbkdf2Sync(Buffer.from(fullwidth, 'utf8'), EMAIL, 1000, 32, 'sha256')
+  const folded = pbkdf2Sync('abc', EMAIL, 1000, 32, 'sha256')
+  check('NFKC would change this password (fixture sanity)', !raw.equals(folded))
+  const key = await deriveMasterKey(fullwidth, EMAIL, 0, 1000)
+  check('the password bytes are not NFKC-normalized', key.equals(raw), key.toString('hex'))
+}
+
 // ── Argon2id (KDF 1): the memory unit is the whole point ─────────────────────
 if (hashWasm) {
   const native = await hashWasm({
-    password: PASSWORD.normalize('NFKC'),
-    salt: EMAIL,
+    password: PASSWORD,
+    salt: ARGON2_SALT,
     parallelism: 4,
     iterations: 3,
     memorySize: 64 * 1024,
@@ -79,8 +92,8 @@ if (hashWasm) {
   })
   check('the pinned digest is an Argon2id run at 64 MiB (65536 KiB)', native === ARGON2_MIB_HEX, native)
   const kibOnly = await hashWasm({
-    password: PASSWORD.normalize('NFKC'),
-    salt: EMAIL,
+    password: PASSWORD,
+    salt: ARGON2_SALT,
     parallelism: 4,
     iterations: 3,
     memorySize: 64,

@@ -142,7 +142,9 @@ export async function serverMasterKey(password, kdf) {
     return Buffer.from(
       await argon2id({
         password,
-        salt: EMAIL,
+        // Same derivation as the client: the salt is SHA-256 of the email, so
+        // the mock cannot agree with a client that skips the hash step.
+        salt: createHash('sha256').update(EMAIL, 'utf8').digest(),
         parallelism: kdf.kdfParallelism ?? 4,
         iterations: kdf.kdfIterations ?? 3,
         // Server side of the same unit: MiB in, KiB to hash-wasm. Keeping this
