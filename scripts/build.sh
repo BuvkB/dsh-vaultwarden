@@ -50,7 +50,9 @@ link_pkg() {
   ' "node_modules/$name" "$DEP_ROOT/$name"
 }
 
-PEERS="@deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/schemastery @deepseek-ai/dsh-llm"
+# dsh-llm used to ride along here, but nothing in lib/ imports it and the
+# manifest never declared it — a symlink to nothing only misleads maintainers.
+PEERS="@deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/schemastery"
 
 for pkg in $PEERS; do
   link_pkg "$pkg"
