@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, readFileSync
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { listSessionLogs, isIdle, sweepLog, sweepAll } from '../lib/sweeper.js'
+import { listSessionLogs, isIdle, sweepLog, sweepAll, replaceKnownValues } from '../lib/sweeper.js'
 
 let passed = 0
 let failed = 0
@@ -475,6 +475,86 @@ try {
   check('a swept log keeps the header first', afterEventsAll[0]?.type === 'session')
 } finally {
   rmSync(root, { recursive: true, force: true })
+}
+
+// ── degenerate single-frame log with no newline (audit F6) ────────────────────
+// The reassembly branch for "no newline at all" referenced an undefined LF
+// constant and threw a ReferenceError, which aborted the whole sweep round and
+// permanently blocked every log queued behind this one.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'bw-sweep-nolf-'))
+  try {
+    const logPath = join(dir, 'session.v4.jsonl.zstd')
+    // A tool/call line: the one shape that both harvests and self-contains its
+    // secret, so a single-line log still triggers a rewrite.
+    const event = JSON.stringify({ type: 'tool/call', seq: 2, time: 1, data: { turn: 1, step: 1, callId: 'c1', name: 'bitwarden_get', arguments: JSON.stringify({ name: 'n', password: SECRET_PW }) } })
+    writeFileSync(logPath, zstdCompress(event), { mode: 0o640 })
+    let result = null
+    let threw = null
+    try {
+      result = await sweepLog(logPath, { skipIdleCheck: true })
+    } catch (error) {
+      threw = error
+    }
+    check('a newline-less single-frame log sweeps without throwing', !threw && result?.status !== 'error', String(threw ?? result?.error))
+    const swept = zstdDecompress(readFileSync(logPath))
+    check(
+      'the newline-less log loses the secret and gains the trailing newline',
+      !swept.includes(SECRET_PW) && swept.endsWith(String.fromCharCode(10)) && swept.split(String.fromCharCode(10)).filter(Boolean).length === 1,
+      JSON.stringify(swept.slice(0, 120)),
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ── the harvest list stays local to the log (audit F5) ────────────────────────
+// processLog used to fold options.knownSecrets into its returned harvest, so
+// sweepAllRun re-stamped EVERY seed every round and the 30-day seed TTL could
+// never fire — swept-secrets.json became a credential store that never forgets.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'bw-sweep-seed-'))
+  try {
+    const injected = ['a-seed-from-', 'another-log-', 'xyz'].join('')
+    const cleanLog = join(dir, 'clean.v4.jsonl.zstd')
+    writeFileSync(
+      cleanLog,
+      zstdCompress(JSON.stringify(sessionHeader) + '\n' + JSON.stringify({ type: 'user/message', data: { message: { role: 'user', content: [{ type: 'text', text: 'hello' }] } } }) + '\n'),
+      { mode: 0o640 },
+    )
+    const clean = await sweepLog(cleanLog, { skipIdleCheck: true, knownSecrets: [injected] })
+    check('injected seeds are not reported as this log harvest', Array.isArray(clean.harvested) && !clean.harvested.includes(injected), JSON.stringify(clean.harvested))
+    const carrierLog = join(dir, 'carrier.v4.jsonl.zstd')
+    writeFileSync(
+      carrierLog,
+      zstdCompress(JSON.stringify(sessionHeader) + '\n' + JSON.stringify(toolCall('bitwarden_get', { name: 'n', password: injected })) + '\n'),
+      { mode: 0o640 },
+    )
+    const carrier = await sweepLog(carrierLog, { skipIdleCheck: true })
+    check('a log that really carries a value still reports it', Array.isArray(carrier.harvested) && carrier.harvested.includes(injected), JSON.stringify(carrier.harvested))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ── the echo pass does not depend on key order (audit F9) ─────────────────────
+// The JSON drill-down used to be gated on a hit counter shared by the whole
+// object: once a sibling's direct replacement hit, a later key's ESCAPED
+// secret (which never matches the raw needle) was left in plain text.
+{
+  const marker = (kind) => '{{BW_PASSWORD_' + kind + '}}'
+  const secrets = new Set(['pa"ss123'])
+  const nested = JSON.stringify({ stdout: 'token=pa"ss123' })
+  const textFirst = { text: 'echo pa"ss123', result: nested }
+  replaceKnownValues(textFirst, secrets, marker('x'), 0)
+  const resultFirst = { result: nested, text: 'echo pa"ss123' }
+  replaceKnownValues(resultFirst, secrets, marker('x'), 0)
+  check(
+    'the escaped JSON form is redacted regardless of key order',
+    !String(textFirst.result).includes('ss123') && !String(resultFirst.result).includes('ss123'),
+    JSON.stringify(textFirst.result) + ' vs ' + JSON.stringify(resultFirst.result),
+  )
+  check('the direct echo hit still lands', textFirst.text.includes('{{BW_PASSWORD_x}}'))
 }
 
 console.log('')
