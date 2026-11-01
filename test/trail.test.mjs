@@ -433,6 +433,59 @@ const main = async () => {
   check('a page before the start lands on the first one', before.ledger.page === 1, JSON.stringify(before.ledger))
   const nonsense = aggregateTrail(paged, { days: 7, now: NOW, page: 'yesterday' })
   check('a page that is not a number is the first one', nonsense.ledger.page === 1, JSON.stringify(nonsense.ledger))
+
+  // ── the ledger narrows to one conversation or one model ───────────────────
+  // A board row's click sends its key back and the ledger answers for the
+  // narrowed list alone: its rows, its pages, its stated total. The headline
+  // and the rails keep describing the whole window — the board is the map and
+  // must not move under a reader who narrowed the listing. The empty model
+  // string is the wire's name for the unattributed bucket, whose raw model is
+  // null and can therefore not ride the wire as itself.
+  const narrow = {
+    version: 2,
+    files: {
+      '/sessions/ws/session-a': {
+        title: '会话甲',
+        days: { [dayOf(NOW)]: { n: 4, r: 2, m: { 'curi-gate/zcode/GLM-5.3': 3, 'stepfun/step-5': 1 } } },
+        values: {},
+        rows: [
+          { t: NOW - 60000, n: 2, m: 'curi-gate/zcode/GLM-5.3' },
+          { t: NOW - 120000, n: 1, m: 'curi-gate/zcode/GLM-5.3' },
+          { t: NOW - 180000, n: 1, m: 'stepfun/step-5' },
+        ],
+      },
+      '/sessions/ws/session-b': {
+        title: '会话乙',
+        days: { [dayOf(NOW)]: { n: 3, r: 1, m: { 'stepfun/step-5': 3 } } },
+        values: {},
+        rows: [{ t: NOW - 240000, n: 3, m: 'stepfun/step-5' }],
+      },
+      '/sessions/ws/session-c': {
+        title: '会话丙',
+        days: { [dayOf(NOW)]: { n: 2, r: 1, m: {} } },
+        values: {},
+        rows: [{ t: NOW - 300000, n: 2, m: null }],
+      },
+    },
+    meta: {},
+  }
+  const wholeNarrow = aggregateTrail(narrow, { days: 7, now: NOW })
+  check('the unfiltered ledger counts every burst', wholeNarrow.ledger.total === 4, JSON.stringify(wholeNarrow.ledger))
+  check('the model rail carries the key a click sends back', JSON.stringify(wholeNarrow.flows.models.map((model) => model.key)) === JSON.stringify(['stepfun/step-5', 'curi-gate/zcode/GLM-5.3', null]), JSON.stringify(wholeNarrow.flows.models))
+  const bySession = aggregateTrail(narrow, { days: 7, now: NOW, session: 'session-a' })
+  check('a session filter keeps only that conversation', bySession.rows.length === 2 && bySession.rows.every((row) => row.session === 'session-a'), JSON.stringify(bySession.rows))
+  check('a session filter states the narrowed total', bySession.ledger.total === 2, JSON.stringify(bySession.ledger))
+  check('a session filter leaves the headline alone', bySession.total === wholeNarrow.total, JSON.stringify([wholeNarrow.total, bySession.total]))
+  check('a session filter leaves the rails alone', JSON.stringify(bySession.sessions) === JSON.stringify(wholeNarrow.sessions) && JSON.stringify(bySession.models) === JSON.stringify(wholeNarrow.models))
+  check('a session filter leaves the flows alone', JSON.stringify(bySession.flows) === JSON.stringify(wholeNarrow.flows))
+  const pastNarrow = aggregateTrail(narrow, { days: 7, now: NOW, session: 'session-a', page: 99 })
+  check('a page past the narrowed list clamps to it', pastNarrow.ledger.page === 1 && pastNarrow.ledger.pages === 1 && pastNarrow.rows.length === 2, JSON.stringify(pastNarrow.ledger))
+  const byModel = aggregateTrail(narrow, { days: 7, now: NOW, model: 'stepfun/step-5' })
+  check('a model filter keeps both conversations that used it', byModel.ledger.total === 2 && byModel.rows.every((row) => row.provider === 'stepfun' && row.model === 'step-5'), JSON.stringify(byModel.rows))
+  const unattributed = aggregateTrail(narrow, { days: 7, now: NOW, model: '' })
+  check('the empty model string narrows to the unattributed bucket', unattributed.ledger.total === 1 && unattributed.rows.length === 1 && unattributed.rows[0].model == null && unattributed.rows[0].session === 'session-c', JSON.stringify(unattributed.rows))
+  const both = aggregateTrail(narrow, { days: 7, now: NOW, session: 'session-a', model: 'stepfun/step-5' })
+  check('session and model narrow together', both.ledger.total === 1 && both.rows.length === 1, JSON.stringify(both.rows))
   // ── the ledger window is the axis window ──────────────────────────────────
   // "Seven days" is seven DAYS as the axis draws them — midnight to midnight —
   // not "now minus 168 hours". Filtering the rows by a rolling instant instead

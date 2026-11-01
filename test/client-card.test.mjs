@@ -3329,62 +3329,82 @@ async function main() {
   // must reach the host for the trail's numbers rather than inventing
   // them locally.
   {
+    // The reply is a small model of the host: when a click on a board row
+    // arrives with a filter key, the ledger's rows and its stated total answer
+    // for the narrowed list only — exactly what lib/trail.js does — while the
+    // headline and the rails keep describing the whole window.
+    const trailRows = [
+      { time: Date.parse('2026-10-26T14:15:00+08:00'), count: 12, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
+      { time: Date.parse('2026-10-26T13:40:00+08:00'), count: 3, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
+      { time: Date.parse('2026-10-26T09:02:00+08:00'), count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
+      { time: Date.parse('2026-10-26T08:02:00+08:00'), count: 7, provider: null, model: null, session: 'ccc', name: '脱敏流水详情页与移动端优化' },
+    ]
     const trailRpc = makeRpc({
-      trail: (args) => ({
-        ok: true,
-        value: {
-          range: args.days,
-          total: 1557,
-          distinct: 853,
-          requests: 281,
-          days: Array.from({ length: args.days }, (_, index) => ({ day: `2026-10-${String(index + 1).padStart(2, '0')}`, count: index })),
-          sessions: [
-            { key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
-            { key: '/sessions/bbb', id: 'bbb', name: '馒头保号登录', count: 300 },
-            { key: '/sessions/ccc', id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
-            { key: '/sessions/ddd', id: 'ddd', name: '第四个会话不该上板', count: 90 },
-          ],
-          models: [
-            { provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 },
-            { provider: 'stepfun', model: 'step-5-preview', count: 220 },
-            { provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 120 },
-            { provider: 'zhipu', model: 'glm-5', count: 60 },
-            { provider: null, model: null, count: 7 },
-          ],
-          // Only the three busiest on each side get a ribbon. The pairs are
-          // what the board draws, not a decoration: 400 went aaa →
-          // workbuddy, 180 went bbb → stepfun, 90 went ccc → zcode.
-          flows: {
+      trail: (args) => {
+        const reply = {
+          ok: true,
+          value: {
+            range: args.days,
+            total: 1557,
+            distinct: 853,
+            requests: 281,
+            days: Array.from({ length: args.days }, (_, index) => ({ day: `2026-10-${String(index + 1).padStart(2, '0')}`, count: index })),
             sessions: [
-              { id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
-              { id: 'bbb', name: '馒头保号登录', count: 300 },
-              { id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
+              { key: '/sessions/aaa', id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
+              { key: '/sessions/bbb', id: 'bbb', name: '馒头保号登录', count: 300 },
+              { key: '/sessions/ccc', id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
+              { key: '/sessions/ddd', id: 'ddd', name: '第四个会话不该上板', count: 90 },
             ],
             models: [
               { provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 },
               { provider: 'stepfun', model: 'step-5-preview', count: 220 },
               { provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 120 },
+              { provider: 'zhipu', model: 'glm-5', count: 60 },
+              { provider: null, model: null, count: 7 },
             ],
-            links: [
-              { session: 'aaa', provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 400 },
-              { session: 'bbb', provider: 'stepfun', model: 'step-5-preview', count: 180 },
-              { session: 'ccc', provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 90 },
-            ],
-            otherSessions: { count: 175, items: 1 },
-            otherModels: { count: 190, items: 2 },
+            // Only the three busiest on each side get a ribbon. The pairs are
+            // what the board draws, not a decoration: 400 went aaa →
+            // workbuddy, 180 went bbb → stepfun, 90 went ccc → zcode.
+            flows: {
+              sessions: [
+                { id: 'aaa', name: '喜鹊服务配置与插件安装', count: 475 },
+                { id: 'bbb', name: '馒头保号登录', count: 300 },
+                { id: 'ccc', name: '脱敏流水详情页与移动端优化', count: 220 },
+              ],
+              // `key` is what a click on the row sends back as the ledger's
+              // filter; the client reconstructs nothing.
+              models: [
+                { provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 480 },
+                { provider: 'stepfun', model: 'step-5-preview', count: 220 },
+                { provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 120 },
+              ].map((entry) => ({ ...entry, key: entry.provider + '/' + entry.model })),
+              links: [
+                { session: 'aaa', provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', count: 400 },
+                { session: 'bbb', provider: 'stepfun', model: 'step-5-preview', count: 180 },
+                { session: 'ccc', provider: 'curi-gate', model: 'zcode/GLM-5.3', count: 90 },
+              ],
+              otherSessions: { count: 175, items: 1 },
+              otherModels: { count: 190, items: 2 },
+            },
+            rows: trailRows,
+            // Three pages of bursts, the first one asked for. The page the host
+            // answers with is the page the pager shows: it clamps the number, so
+            // the client never formats a page it did not receive.
+            ledger: { page: Number(args.page) === 2 ? 2 : 1, pages: 3, size: 40, total: 96 },
+            index: { pending: 0, total: 194, scannedAt: Date.now(), sessions: 194 },
           },
-          rows: [
-            { time: Date.parse('2026-10-26T14:15:00+08:00'), count: 12, provider: 'curi-gate', model: 'workbuddy/deepseek-v4.1-flash', session: 'aaa', name: '喜鹊服务配置与插件安装' },
-            { time: Date.parse('2026-10-26T09:02:00+08:00'), count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
-            { time: Date.parse('2026-10-26T08:02:00+08:00'), count: 7, provider: null, model: null, session: 'ccc', name: '脱敏流水详情页与移动端优化' },
-          ],
-          // Three pages of bursts, the first one asked for. The page the host
-          // answers with is the page the pager shows: it clamps the number, so
-          // the client never formats a page it did not receive.
-          ledger: { page: Number(args.page) === 2 ? 2 : 1, pages: 3, size: 40, total: 96 },
-          index: { pending: 0, total: 194, scannedAt: Date.now(), sessions: 194 },
-        },
-      }),
+        }
+        if (typeof args.sessionKey === 'string' || typeof args.modelKey === 'string') {
+          const keyOf = (row) => (row.model ? (row.provider ? row.provider + '/' + row.model : row.model) : null)
+          reply.value.rows = trailRows.filter(
+            (row) =>
+              (typeof args.sessionKey !== 'string' || row.session === args.sessionKey) &&
+              (typeof args.modelKey !== 'string' || (args.modelKey === '' ? row.model == null : keyOf(row) === args.modelKey)),
+          )
+          reply.value.ledger = { page: 1, pages: 1, size: 40, total: reply.value.rows.length }
+        }
+        return reply
+      },
     })
     const panel = await mountPanel(mod, {}, trailRpc)
     await flush()
@@ -3478,6 +3498,81 @@ async function main() {
     check('a wider window is re-read from the host', trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 30), JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').map((call) => call.args)))
     check('the wider window is the selected one', range()[1].props['aria-pressed'] === true && range()[0].props['aria-pressed'] === false)
     check('the wider window draws thirty bars', root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length === 30, String(root().findAll((node) => node.props?.['data-vw-bar'] !== undefined).length))
+
+    // ── the board's rows are switches ────────────────────────────────────────
+    // A click narrows the ledger to that conversation or model: its rows, its
+    // stated total answer for the narrowed list, while the board keeps
+    // describing the whole window. The chip in the ledger's header — or a
+    // second click on the active row — is the way back out, so narrowing is
+    // never a one-way door.
+    await act(async () => { range()[0].props.onClick() })
+    await flush(120)
+    const flowNodes = () => root().findAll((node) => node.props?.['data-vw-trail-flow-node'] !== undefined)
+    const rankBadge = (node) => node.props.children[0]
+    check('the board offers six switchable rows', flowNodes().length === 6 && flowNodes().every((node) => node.props.type === 'button' && node.props['aria-pressed'] === false), String(flowNodes().length))
+    check(
+      'the rank badges carry one hue per rank, shared across the rails',
+      rankBadge(flowNodes()[0]).props.style.background !== rankBadge(flowNodes()[1]).props.style.background &&
+        rankBadge(flowNodes()[1]).props.style.background !== rankBadge(flowNodes()[2]).props.style.background &&
+        rankBadge(flowNodes()[0]).props.style.background === rankBadge(flowNodes()[3]).props.style.background,
+      JSON.stringify([rankBadge(flowNodes()[0]).props.style.background, rankBadge(flowNodes()[1]).props.style.background, rankBadge(flowNodes()[2]).props.style.background]),
+    )
+    // The row's wash must fade, not pop: the control-confirm timing the rest
+    // of the panel hovers by (a missing transition reads as a repaint).
+    check('a row fades its hover wash in and out', String(flowNodes()[0].props.style.transition || '').includes('background-color'), String(flowNodes()[0].props.style.transition))
+    check('a row says what a click does', flowNodes()[0].props.title === '只看它产生的脱敏流水', String(flowNodes()[0].props.title))
+    await act(async () => { flowNodes()[0].props.onClick() })
+    await flush(120)
+    check(
+      'a session row asks for that conversation only',
+      trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 7 && call.args.page === 1 && call.args.sessionKey === 'aaa' && call.args.modelKey === undefined),
+      JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').at(-1)?.args),
+    )
+    check('the active row reads as selected', flowNodes()[0].props['data-active'] === 'true' && flowNodes()[0].props['aria-pressed'] === true)
+    check('the ledger grows a chip naming the conversation', bodyText().includes('按会话筛选') && bodyText().includes('喜鹊服务配置与插件安装 · 清除筛选，恢复全部流水'))
+    // The chip's font-size must survive its own style object: a `font`
+    // shorthand written after font-size resets it to the inherited 13px, and
+    // the chip reads a size too big — this guards that regression.
+    const chipNode = () => root().findAll((node) => node.props?.['data-vw-trail-filter'] !== undefined)[0]
+    check('the chip keeps its caption size', Number(chipNode().props.style.fontSize) === 10.5, String(chipNode().props.style.fontSize))
+    check('the board keeps describing the whole window', trail().findAll((node) => node.props?.['data-vw-trail-count'] !== undefined)[0].props.children === '1,557')
+    check('the narrowed ledger states its own length', bodyText().includes('共 2 条'), (bodyText().match(/共 \d+ 条/) || [])[0])
+    // The row's second cell is the conversation's name; reading the cell keeps
+    // clear of the fiber loop a JSON.stringify(children) would walk into.
+    check('the narrowed ledger lists only that conversation', trail().findAll((node) => node.props?.['data-vw-trail-row'] !== undefined).every((node) => node.props.children[1].props.children === '喜鹊服务配置与插件安装'))
+    // The ledger row must leave its hover wash to the stylesheet: an inline
+    // background — even transparent — outranks the base button rule's hover
+    // and the row hovered with no feedback (the board row's regression again).
+    const ledgerRowNode = trail().findAll((node) => node.props?.['data-vw-trail-row'] !== undefined)[0]
+    check('a ledger row leaves its wash to the stylesheet', ledgerRowNode.props.style.background === undefined && String(ledgerRowNode.props.style.borderRadius).length > 0 && String(ledgerRowNode.props.style.margin) === '0 6px', JSON.stringify({ bg: ledgerRowNode.props.style.background, radius: ledgerRowNode.props.style.borderRadius, margin: ledgerRowNode.props.style.margin }))
+    const filterChip = () => root().findAll((node) => node.props?.['data-vw-trail-filter'] !== undefined)[0]
+    await act(async () => { filterChip().props.onClick() })
+    await flush(120)
+    check(
+      'clearing the chip asks for the whole window again',
+      trailRpc.calls.some((call) => call.method === 'trail' && call.args.days === 7 && call.args.sessionKey === undefined && call.args.modelKey === undefined),
+      JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').at(-1)?.args),
+    )
+    check('the chip is gone and the ledger is whole again', !bodyText().includes('按会话筛选') && bodyText().includes('共 96 条'))
+    await act(async () => { flowNodes()[0].props.onClick() })
+    await flush(120)
+    await act(async () => { flowNodes()[0].props.onClick() })
+    await flush(120)
+    check('a second click on the active row clears it too', !bodyText().includes('按会话筛选') && bodyText().includes('共 96 条'))
+    const modelRowKey = trailRows[0].provider + '/' + trailRows[0].model
+    await act(async () => { flowNodes()[3].props.onClick() })
+    await flush(120)
+    check(
+      'a model row asks for that model only',
+      trailRpc.calls.some((call) => call.method === 'trail' && call.args.modelKey === modelRowKey && call.args.sessionKey === undefined),
+      JSON.stringify(trailRpc.calls.filter((call) => call.method === 'trail').at(-1)?.args),
+    )
+    // The chip names the KIND; the clicked model's full name rides the chip's
+    // tooltip (the wire key stays the joined provider/model string).
+    check('the chip names the model', bodyText().includes('按模型筛选') && bodyText().includes(trailRows[0].model + ' · 清除筛选，恢复全部流水'))
+    await act(async () => { filterChip().props.onClick() })
+    await flush(120)
+    check('the model filter clears as well', !bodyText().includes('按模型筛选') && bodyText().includes('共 96 条'))
 
     // Back to the list: the other page must still be there, still be the
     // list, and still be inside the same container.
