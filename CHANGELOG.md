@@ -22,9 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 原子写补写满循环：writeSync 允许短写，短写后被 fsync+rename 原子固化为截断记录——恰好击穿本模块防半写的目的（session.json、缓存、种子/状态文件全走此函数）。
 - 面板后台轮询改用 quiet 读：轮询失败不再把整个列表视图替换成「读取失败」错误卡，保持屏上数据等下一次轮询重试。
 - host-entry 的 RPC 一致性校验先剥离参数对象内的行注释再提取字段名：此前 client.js 里 invoke('trail', …) 实参内注释里的「RPC:」被当字段名误报，该套件长期红导致完整构建在 host-entry 处中断、其后 9 个套件不再运行。
+- 面板切换条目时清空上一条遗留的 reprompt 主密码输入与报错文案（验证失败过的也不残留）。
+- 编辑器保存加代际守卫：Escape 或切换条目打断保存后，迟到的保存续体不再把上一条目的结果与基线写进新编辑器；详情错误态的「重试」按钮改为真正重跑读取（此前点击是关闭卡片）。
+- status 探针的看门狗重试带代际：首探针只是慢（未挂起）时，其迟到答案不再覆盖较新的报告，也不再每个搜索键入都双发探针。
+- 配置透传 sessionPath/cachePath：composition 配置的自定义路径此前被静默丢弃、永远落默认路径；pollIntervalSeconds 低于 30 现在钳到 30 而不是回落 300（与 schema 描述一致）。
+- 日志擦除的定时器在 dispose 之后的 reconfigure 不再复活（补 disposed 检查）。
+- 写路径入参消毒：reprompt 非数字报 bad_request（此前序列化成 null 让服务器报无分类 500）；与条目类型不符的负载参数（对 login 传 card 等）显式拒绝——此前静默丢弃还返回 updated:true。
+- ensureToken 的密码授权加单飞：N 个并发调用合并为一次完整登录（与 refresh/unlock 同型），不再齐轰登录端点。
+- 凭据被拒的判定要求响应体证据（invalid_grant 等）：裸 401/403（反代、SSO 网关、强制门户）不再误删好会话。
+- revision 探针兼容 ISO 时间戳：对准官方 Bitwarden 服务器的部署不再每次轮询都全量同步。
+- decodeUserKeyRecord 拒收缺 MAC 的会话记录并改为重新派生（此前在类型 2 解密上裸 TypeError）。
 
 ### 优化
 
+- Argon2id/PBKDF2 派生移出主线程（libuv 线程池）：600k 轮约 140ms 不再阻塞事件循环。
+- trail-index 老会话记录清理：整条记录都落在窗口外的会话只保留身份/offset 字段（settled 快路径不变），索引不再随会话数无界增长。
+- trail 详情页先读日志尾部 8MB 找窗口，窗口早于尾部才退全读：点击详情不再把整份压缩日志读进内存。
+- sweeper：短数字种子的排除真正生效（小于 9 位纯数字不再入库——种子库喂的是盲子串替换，6 位数字会在语料里误伤更大的数字）；harvestRange 遇到永不修复的帧损坏跳过该段继续推进（此前卡死、其后字节永不收割）；内存上界的头注释改为与实现一致。
+- mask key 文件存在但长度不对时按「脱敏不可用」处理（fail-closed），不再静默换钥导致旧占位符全部失联；两进程首建竞态改为以落盘者为准。
+- session-store 的账号字段校验对齐 cache-store 严格语义：缺 serverUrl/email 的记录不再被任何账号复用。
+- WebSocket 通知通道 start() 清零重连计数：复用实例不再继承上一轮的失败预算。
+- 面板杂项：quiet 读失败把状态从「刷新中」收回「就绪」；localStorage 快照数据未变时仍更新时间戳（闲置超过 5 分钟后首绘优化不再失效）；存档的 accessMode 按账号键匹配（换账号首帧不再借用上一账号的档位）；登录/两步验证表单的 Enter 提交加 busy 防重；新建条目切换类型保留已输入的名称与备注；图标探测加 8 秒超时（黑洞 URL 不再让该 host 的图标永久消失）；missingMethod 的散文兜底只在失败无 code 时生效（业务 404 不再被误判为旧宿主）；切换分区时关闭编辑器；复制按钮读取被拒时在 tooltip 显示原因（此前零反馈）。
+- RSA EncString 6/7 类型从「忽略尾部签名的解密」改为显式拒绝（没有真实服务器产出该类型）；4/5 的映射注释注明与真实 Vaultwarden 的实测依据。
+- build.sh 不再链接未被任何代码引用的 @deepseek-ai/dsh-llm。
 - 点按门禁看板的行（或清除筛选）不再让整页闪跳：切换筛选时保留屏上数字原地换新，不再塌到占位符再重挂、重播入场动画。
 - 筛选胶囊的字号不再被样式里的 `font` 简写重置成 13px，恢复 10.5px 的注脚档。
 
