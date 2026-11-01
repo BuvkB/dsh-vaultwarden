@@ -215,12 +215,31 @@ async function main() {
     const paramsOf = (fn) => fn.toString().slice(fn.toString().indexOf('(') + 1, fn.toString().indexOf(')')).split(',').map((part) => part.trim()).filter(Boolean)
     const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
     const callPattern = /invoke\('([A-Za-z]+)'\s*(?:,\s*\{([^}]*)\})?/g
+    // A line comment inside the argument object may contain "word:"; cut
+    // line comments (quote-aware, so an 'https://' string literal survives)
+    // before reading field names out of the body, or prose decides the verdict.
+    const withoutLineComments = (text) => text
+      .split('\n')
+      .map((line) => {
+        let quote = null
+        for (let i = 0; i < line.length - 1; i++) {
+          const ch = line[i]
+          if (quote) {
+            if (ch === quote && line[i - 1] !== '\\') quote = null
+            continue
+          }
+          if (ch === '"' || ch === "'" || ch === '`') quote = ch
+          else if (ch === '/' && line[i + 1] === '/') return line.slice(0, i)
+        }
+        return line
+      })
+      .join('\n')
     const offenders = []
     for (const match of clientSource.matchAll(callPattern)) {
       const [, method, body] = match
       const declared = paramsOf(VaultGateway.prototype[method] ?? (() => {}))
       if (!declared.length && body === undefined) continue
-      const sent = [...(body ?? '').matchAll(/([A-Za-z][\w]*)\s*:/g)].map((entry) => entry[1])
+      const sent = [...withoutLineComments(body ?? '').matchAll(/([A-Za-z][\w]*)\s*:/g)].map((entry) => entry[1])
       for (const field of sent) if (!declared.includes(field)) offenders.push(`${method}.${field}`)
     }
     return offenders.length === 0
