@@ -210,6 +210,37 @@ async function main() {
   check('restored item is back', afterRestore.matched === 1)
   check('restore clears deletedDate on the row', !server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-legacy')?.deletedDate)
 
+  // 6b. reprompt write gate (audit F4) ---------------------------------------------
+  // The read path refuses a reprompt entry without a human proof; the write
+  // path used to be wide open — a tool call could flip the flag off and then
+  // read the secret it had just unlocked.
+  const updatesBefore = server.stats.mutations.filter((entry) => entry === 'update').length
+  let repromptWriteError = null
+  try {
+    await mutations.update('cipher-reprompt', { notes: '绕过尝试' }, undefined)
+  } catch (error) {
+    repromptWriteError = error
+  }
+  check('reprompt entry update without proof is refused', repromptWriteError?.code === 'reprompt_required', String(repromptWriteError?.code))
+  repromptWriteError = null
+  try {
+    await mutations.update('cipher-reprompt', { reprompt: 0 }, undefined)
+  } catch (error) {
+    repromptWriteError = error
+  }
+  check('reprompt flag flip without proof is refused', repromptWriteError?.code === 'reprompt_required', String(repromptWriteError?.code))
+  check('neither refusal reached the server', server.stats.mutations.filter((entry) => entry === 'update').length === updatesBefore)
+  const proof = await client.authorizeReprompt(PASSWORD, undefined, { id: 'cipher-reprompt' })
+  check("the panel proof opens this entry's write path", proof?.authorized === true && client.repromptGrantedFor('cipher-reprompt') === true, JSON.stringify(proof))
+  await mutations.update('cipher-reprompt', { notes: '面板已验证后的修改' }, undefined)
+  check('update on a proven reprompt entry lands', server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-reprompt')?.notes != null)
+  await mutations.update('cipher-reprompt', { reprompt: 0 }, undefined)
+  check('the flag flips only with a proof', server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-reprompt')?.reprompt === 0)
+  const unlockedRead = JSON.parse(await client.get('cipher-reprompt'))
+  check('the secret is readable once the gated flip landed', unlockedRead.password === 'reprompt-pass-9', JSON.stringify(unlockedRead).slice(0, 120))
+  await mutations.update('cipher-reprompt', { reprompt: 1 }, undefined)
+  check('the flag can be re-enabled under the same proof', server.fixtures.syncPayload.ciphers.find((cipher) => cipher.id === 'cipher-reprompt')?.reprompt === 1)
+
   // 7. permanent purge needs the explicit confirmation (P1-5) ----------------------
   let confirmError = null
   try {
