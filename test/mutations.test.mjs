@@ -90,6 +90,16 @@ async function main() {
   check('the body comes back on field=secureNote', noteBody.secureNote?.notes === '多行\n备注', JSON.stringify(noteBody).slice(0, 160))
   check('secure note summary reports folderId (P0-6)', JSON.parse(await client.find('安全笔记 A')).items[0]?.folderId === 'folder-work')
 
+  // An empty secure note is still a type-2 cipher, but there is no body to
+  // fetch. `all` used to key the class off the `secureNote` object (which
+  // every type-2 cipher carries) instead of the body, so the panel hung a
+  // "contains a secure note" row — with an eye that could never return
+  // anything — on notes with nothing in them.
+  const emptyNote = await mutations.create({ type: 'secureNote', name: '空安全笔记', notes: '', secureNote: { type: 0 } }, undefined)
+  const emptyRead = JSON.parse(await client.get(emptyNote.id))
+  check('an empty secure note reports no fetchable body', emptyRead.type === 'secureNote' && emptyRead.secureNote === undefined, JSON.stringify(emptyRead).slice(0, 160))
+  check('a note with a body still reports its class', noteRead.secureNote?.type === 0)
+
   // 2. create validation ---------------------------------------------------------
   const before = server.stats.created
   let validationError = null

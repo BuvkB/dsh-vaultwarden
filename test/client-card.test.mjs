@@ -3041,6 +3041,153 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── an empty secure note must not offer a fetch that cannot succeed ────────
+  // Every type-2 cipher carries a `secureNote` object, body or not. Keying the
+  // pane's "contains a secure note" row off that object put an eye on empty
+  // notes that could never show anything (the narrow read answers null), and
+  // the row read as "安全笔记 / 含安全笔记" beside an entry whose body is blank.
+  {
+    const emptyNote = {
+      id: 'item-empty-note', name: '空安全笔记', type: 'secureNote',
+      secureNote: undefined, fields: [], uris: [], collections: [], folder: null,
+    }
+    const rpc = makeRpc({
+      list: () => ({
+        ok: true,
+        value: {
+          query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1,
+          items: [{ id: 'item-empty-note', name: '空安全笔记', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }],
+        },
+      }),
+      reveal: () => ({ ok: true, value: emptyNote }),
+    })
+    const panel = await mountPanel(mod, {}, rpc)
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.role === 'option')[0].props.onClick() })
+    await flush()
+    const text = JSON.stringify(panel.renderer.toJSON())
+    check('an empty secure note shows no "contains a secure note" row', !text.includes('含安全笔记'), text.slice(0, 260))
+    check('an empty secure note still names the (empty) body field', text.includes('笔记内容'))
+    check('an empty secure note offers no dead fetch button', !panel.renderer.root.findAllByType('button').some((node) => node.props.title === '读取这一项'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a note with a body fetches it on demand, then masks it ─────────────────
+  {
+    const noteBody = 'SECRET-NOTE-BODY'
+    const baseNote = { id: 'item-note-body', name: '有正文的笔记', type: 'secureNote', fields: [], uris: [], collections: [], folder: null }
+    let fetches = 0
+    const rpc = makeRpc({
+      list: () => ({
+        ok: true,
+        value: {
+          query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1,
+          items: [{ id: 'item-note-body', name: '有正文的笔记', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: true, customFields: [], favorite: false }],
+        },
+      }),
+      reveal: (args) => {
+        if (args.field === 'secureNote') {
+          fetches += 1
+          return { ok: true, value: { ...baseNote, secureNote: { type: 0, notes: noteBody } } }
+        }
+        return { ok: true, value: { ...baseNote, secureNote: { type: 0 } } }
+      },
+    })
+    const panel = await mountPanel(mod, {}, rpc)
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.role === 'option')[0].props.onClick() })
+    await flush()
+    check('a note with a body says so', JSON.stringify(panel.renderer.toJSON()).includes('含安全笔记'))
+    const fetchButton = () => panel.renderer.root.findAllByType('button').find((node) => node.props.title === '读取这一项')
+    await act(async () => { fetchButton().props.onClick() })
+    await flush()
+    const fetched = JSON.stringify(panel.renderer.toJSON())
+    check('fetching the note body asks the host for that one field', fetches === 1)
+    check('the fetched note body stays masked until asked for', !fetched.includes(noteBody) && fetched.includes('笔记内容'))
+    const revealButton = () => panel.renderer.root.findAllByType('button').find((node) => node.props.title === '显示')
+    await act(async () => { revealButton().props.onClick() })
+    check('the fetched note body reveals on demand', JSON.stringify(panel.renderer.toJSON()).includes(noteBody))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a custom field name is user text and may be arbitrarily long ──────────
+  // It used to sit in the fixed 92px label column: an unbroken name ran under
+  // the masked value and the two painted as one garbled line. The label now
+  // takes the full row and breaks.
+  {
+    const longName = 'm2a_' + 'd'.repeat(64)
+    const item = {
+      id: 'item-long-field', name: '长字段名', type: 'login', username: 'u@example.com',
+      password: 'pw', hasTotp: false, hasNotes: false,
+      fields: [{ name: longName, value: 'SECRET-FIELD-VALUE', type: 0 }],
+      uris: [], collections: [], folder: null,
+    }
+    const rpc = makeRpc({
+      list: () => ({
+        ok: true,
+        value: {
+          query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1,
+          items: [{ id: 'item-long-field', name: '长字段名', type: 'login', username: 'u@example.com', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [longName], favorite: false }],
+        },
+      }),
+      reveal: () => ({ ok: true, value: item }),
+    })
+    const panel = await mountPanel(mod, {}, rpc)
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.role === 'option')[0].props.onClick() })
+    await flush()
+    const textOf = (node) => {
+      if (node == null) return ''
+      if (typeof node === 'string' || typeof node === 'number') return String(node)
+      if (Array.isArray(node)) return node.map(textOf).join('')
+      return textOf(node.children)
+    }
+    const row = panel.renderer.root
+      .findAll((node) => node.props?.['data-vw-field'] !== undefined)
+      .find((node) => textOf(node).startsWith(longName))
+    const labelSpan = row.findAllByType('span')[0]
+    check('a long custom field name takes the whole row', labelSpan.props.style.gridColumn === '1 / -1')
+    check('a long custom field name may break anywhere', labelSpan.props.style.overflowWrap === 'anywhere')
+    check('a long custom field row keeps the value out of the label gutter', row.props['data-vw-field-stacked'] === '')
+    check('the value beside it is still masked', textOf(row).includes('●●●●●●●●') && !JSON.stringify(panel.renderer.toJSON()).includes('SECRET-FIELD-VALUE'))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── a field with the secret pasted into its name box ──────────────────────
+  // Bitwarden's form puts "name" above "value"; an entry made in a hurry can
+  // end up with the key in the name and nothing in the value. The pane must
+  // not print that name as a caption — it is the credential — and with no
+  // value there would be no eye at all. The name is shown as the masked
+  // content under a neutral label instead.
+  {
+    const fieldSecret = 'm2a_' + 'e'.repeat(48)
+    const item = {
+      id: 'item-name-secret', name: '名称里是密钥', type: 'secureNote',
+      fields: [{ name: fieldSecret, type: 0 }, { name: '租户', type: 0 }],
+      uris: [], collections: [], folder: null,
+    }
+    const rpc = makeRpc({
+      list: () => ({
+        ok: true,
+        value: {
+          query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1,
+          items: [{ id: 'item-name-secret', name: '名称里是密钥', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [fieldSecret], favorite: false }],
+        },
+      }),
+      reveal: () => ({ ok: true, value: item }),
+    })
+    const panel = await mountPanel(mod, {}, rpc)
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.role === 'option')[0].props.onClick() })
+    await flush()
+    const text = JSON.stringify(panel.renderer.toJSON())
+    check('a secret in the name box is not printed', !text.includes(fieldSecret), text.slice(0, 240))
+    check('the unnamed content gets a neutral label', text.includes('字段内容'))
+    check('the name-as-content row carries an eye', panel.renderer.root.findAllByType('button').some((node) => node.props.title === '显示'))
+    check('a short empty field keeps its caption and says "—"', text.includes('租户') && text.includes('—'))
+    check('the masked row still copies what it hides', panel.renderer.root.findAllByType('button').some((node) => node.props.title === '复制'))
+    const revealButton = () => panel.renderer.root.findAllByType('button').find((node) => node.props.title === '显示')
+    await act(async () => { revealButton().props.onClick() })
+    check('revealing it shows the original name', JSON.stringify(panel.renderer.toJSON()).includes(fieldSecret))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   // ── the re-prompt window closing takes the plaintext with it ──────────────
   // The expiry path used to clear the reveal flag, the narrow payloads and the
   // editor — and leave `detail` holding the host's full plaintext. The pane
