@@ -2605,6 +2605,18 @@ async function main() {
     check('the editor says the sync finished', eText().includes('已同步到服务器'))
     check('the save left the editor open on the entry', Boolean(editorNode()))
 
+    // After a successful save the form's password input is cleared (no
+    // plaintext stays behind), and the diff base must be rebuilt from the
+    // CLEARED form. When the base kept the old value, a second save saw the
+    // cleared input as a change, sent password:'' — which the write path
+    // treats as "remove the password" — and the entry lost its secret.
+    await act(async () => { editorInput('名称').props.onChange({ target: { value: 'GitHub 主账号 2' } }) })
+    await act(async () => { panel.renderer.root.findAll((n) => n.props?.['data-vw-editor-save'] !== undefined)[0].props.onClick() })
+    await act(async () => { await sleep(60) })
+    check('a second save writes again', writes.length === 2, String(writes.length))
+    const secondInput = writes[1]?.args?.input ?? {}
+    check('the second save does not resend the cleared password', !('password' in secondInput), JSON.stringify(secondInput))
+    check('the second save does not resend the cleared TOTP seed', !('totp' in secondInput))
 
     // Escape steps back out of the editor before it steps out of the card — a
     // reader who opened the wrong entry should not lose the card underneath as
