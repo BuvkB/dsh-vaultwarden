@@ -3390,6 +3390,23 @@ async function main() {
       { time: Date.parse('2026-10-26T08:02:00+08:00'), count: 7, provider: null, model: null, session: 'ccc', name: '脱敏流水详情页与移动端优化' },
     ]
     const trailRpc = makeRpc({
+      passkeyAudit: () => ({
+        ok: true,
+        value: {
+          records: [
+            {
+              at: '2026-11-02T10:50:00.000Z',
+              actor: 'model',
+              entryId: '829db4d5-8574-481d-896c-cceaf8670fa8',
+              entryName: 'telegram.org',
+              rpId: 'telegram.org',
+              accessMode: 'auto',
+              credentialIdHint: 'AAAA…',
+              file: 'telegram.org-test.json',
+            },
+          ],
+        },
+      }),
       trail: (args) => {
         const reply = {
           ok: true,
@@ -3482,6 +3499,7 @@ async function main() {
     check('the trail page carries the headline the host answered', trail().findAll((node) => node.props?.['data-vw-trail-count'] !== undefined)[0].props.children === '1,557')
     check("the trail page drops the search box and the rail", !bodyText().includes("data-vw-search") && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 0)
     check('the trail page names the conversations that asked', bodyText().includes('喜鹊服务配置与插件安装'))
+    check('the trail page shows passkey export audits', bodyText().includes('通行密钥导出') && bodyText().includes('telegram.org') && bodyText().includes('完全权限'))
     // The board is data first: one bar per day of the window, then the three
     // busiest names on each side of the gate. More names must not sneak in —
     // the animation is specified to follow three, and a fourth label at 320px
