@@ -185,6 +185,12 @@ export async function buildFixtures(options = {}) {
   const orgItemKeyRaw = randomBytes(64)
   const orgItemKey = stretchKey(orgItemKeyRaw)
   const legacyKey = { enc: userKey.enc, mac: null }
+  // A real P-256 passkey fixture: the export path converts actual key material
+  // (PKCS#8, base64url fields), so a placeholder string would prove nothing.
+  const passkeyKeyPair = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  const passkeyPkcs8 = passkeyKeyPair.privateKey.export({ type: 'pkcs8', format: 'der' })
+  const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const passkeyCredentialId = randomBytes(16)
 
   const ciphers = [
     {
@@ -199,6 +205,23 @@ export async function buildFixtures(options = {}) {
         password: encryptString('gh-p@ssw0rd-42', userKey),
         totp: encryptString(RFC_URI, userKey),
         uris: [{ uri: encryptString('https://github.com/login', userKey) }],
+        fido2Credentials: [
+          {
+            credentialId: encryptString('b64.' + b64url(passkeyCredentialId), userKey),
+            keyType: encryptString('public-key', userKey),
+            keyAlgorithm: encryptString('ECDSA', userKey),
+            keyCurve: encryptString('P-256', userKey),
+            keyValue: encryptString(b64url(passkeyPkcs8), userKey),
+            rpId: encryptString('github.com', userKey),
+            userHandle: encryptString(b64url(Buffer.from('github-user-1')), userKey),
+            userName: encryptString('octocat@example.com', userKey),
+            counter: encryptString('0', userKey),
+            rpName: encryptString('GitHub', userKey),
+            userDisplayName: encryptString('Octo Cat', userKey),
+            discoverable: encryptString('true', userKey),
+            creationDate: '2026-01-02T03:04:05.000Z',
+          },
+        ],
       },
       fields: [
         { name: encryptString('租户', userKey), value: encryptString('jindom', userKey), type: 0 },
@@ -341,6 +364,10 @@ export async function buildFixtures(options = {}) {
     kdf,
     password,
     masterKey,
+    /** The raw PKCS#8 bytes behind cipher-github's passkey (test assertion aid). */
+    passkeyPkcs8,
+    passkeyCredentialId,
+    passkeyB64Url: b64url,
     masterPasswordHash: hashMasterPassword(masterKey, password),
     encryptedUserKey,
     apiClientId: options.apiClientId ?? `user.${randomUUID()}`,

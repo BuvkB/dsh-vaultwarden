@@ -17,6 +17,7 @@
 - **脱敏模式**：工具读取到的密码、TOTP、卡号等以稳定占位符返回；需要明文时按条目 + 字段单次取回。
 - **日志擦除**：定期把会话日志中的 Bitwarden 明文替换为 `[REDACTED:BW]`，支持增量扫描与立即擦除。
 - **脱敏看板**：按天统计脱敏量，展示脱敏量前三的会话与模型；每根连接线一颗灰色粒子穿过门禁，左灰右蓝分别表示脱敏前/后；底部保留脱敏流水与详情页。
+- **通行密钥**：读取条目里的通行密钥（passkey）元数据；验证主密码后可导出为 0600 的 WebAuthn 凭据文件，也可从文件导入或移除。
 - **安全边界**：面板走宿主已认证的 `/api` connection RPC，插件不注册自己的 HTTP 路由；主密码和 API 密钥是只写字段。
 
 ## 安装
@@ -48,6 +49,8 @@ dsh plugin --profile web add dsh-vaultwarden@latest
 ## 工具
 
 `bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
+
+通行密钥：`bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`
 
 另有 `bitwarden_sweep` 立即擦除本地会话日志中的明文。
 

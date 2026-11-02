@@ -2856,6 +2856,17 @@ async function main() {
     const cardRpc = makeRpc({
       list: () => ({ ok: true, value: { query: '', matched: 1, returned: 1, offset: 0, hasMore: false, vaultItems: 1, items: [{ id: 'item-card', name: '公司信用卡', type: 'card', username: null, uris: [], folder: null, folderId: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false }] } }),
       reveal: (args) => ({ ok: true, value: args.field === 'card' ? cardBody : cardReveal }),
+      passkeys: () => ({
+        ok: true,
+        value: {
+          id: 'item-card',
+          name: '公司信用卡',
+          passkeys: [
+            { index: 0, credentialId: 'AAAA', credentialIdHint: 'AAAA…', rpId: 'github.com', userName: 'octocat', discoverable: true, created: '2026-01-02T03:04:05.000Z' },
+          ],
+        },
+      }),
+      passkeyExport: () => ({ ok: true, value: { ok: true, path: '/tmp/fake-passkey.json' } }),
     })
     const panel = await mountPanel(mod, {}, cardRpc)
     const nodeWith = (key, value = '') => panel.renderer.root.findAll((node) => node.props?.[key] === value)
@@ -2869,6 +2880,15 @@ async function main() {
     check('a card entry is labelled with its type', pText().includes('银行卡'))
     check('opening a card entry does not hand over the card body', pText().includes('含银行卡') && !pText().includes('4111111111111111') && !pText().includes('张伟'))
     check('the passkey badge shows up', pText().includes('含通行密钥'))
+    check('passkeys fold behind a header', nodeWith('data-vw-fold', 'passkeys').length === 1 && pText().includes('通行密钥（1）'))
+    await act(async () => { nodeWith('data-vw-fold', 'passkeys')[0].props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('the passkey list names the site and user', pText().includes('github.com') && pText().includes('octocat'))
+    check('the passkey list reports the credential as discoverable', pText().includes('可发现'))
+    await act(async () => { pButtons().find((node) => node.props.children === '导出').props.onClick() })
+    await act(async () => { await sleep(50) })
+    check('the passkey export reports the file path, not a key', pText().includes('/tmp/fake-passkey.json'))
+    check('the panel says the export file holds a private key', pText().includes('0600'))
     await act(async () => { pButtons().find((node) => node.props.title === '读取这一项').props.onClick() })
     await act(async () => { await sleep(50) })
     check('the card body arrives only when that field is asked for', cardRpc.calls.some((call) => call.method === 'reveal' && call.args.field === 'card'))

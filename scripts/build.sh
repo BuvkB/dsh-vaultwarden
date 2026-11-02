@@ -134,6 +134,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== write-back regression test (trash / concurrency / field preservation) ==="
   node test/write-back.test.mjs
 
+  # Passkeys: decryption of login.fido2Credentials, the gated export (private
+  # key to a 0600 file), and the import/remove write path that must not reset
+  # the entry's own fields.
+  echo "=== passkey vault test (metadata / gated export / import) ==="
+  node test/passkey.test.mjs
+
   # The on-disk privacy contract every record obeys: exclusive-create temp path
   # (a wider file already sitting there is never reused), 0600 carried by the
   # fresh inode instead of a chmod afterwards, no predictable temp name, and a
