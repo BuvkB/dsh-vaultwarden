@@ -2,7 +2,7 @@
 
 English | [中文](README.md)
 
-A Vaultwarden / Bitwarden integration for DeepSeek Harness. Every session can search and read the vault on demand, server changes arrive over WebSocket, requests are masked before they leave, plaintext in local session logs can be scrubbed, and **Settings → Password vault** provides the vault browser and masking dashboard.
+A **Vaultwarden / Bitwarden** integration for DeepSeek Harness. Browse and edit the vault from **Settings → Password vault**, and let models search, read and write entries on demand. Passwords, TOTP codes and card data are masked with stable placeholders by default, and plaintext in local session logs can be scrubbed. Works with self-hosted Vaultwarden and Bitwarden Cloud.
 
 ## Preview
 
@@ -12,13 +12,13 @@ A Vaultwarden / Bitwarden integration for DeepSeek Harness. Every session can se
 
 ## Highlights
 
-- **Real-time sync**: SignalR WebSocket updates, with automatic polling fallback and upgrade retries.
-- **Vault panel**: sections, search, paging, entry details, TOTP countdown, copy, archive/trash and optional write actions.
-- **Masking**: passwords, TOTP codes and card data are returned as stable placeholders; plaintext can be fetched per entry and field only when needed.
-- **Log scrubbing**: Bitwarden plaintext in session logs is replaced with `[REDACTED:BW]`; incremental scanning and immediate sweep are supported.
-- **Masking dashboard**: daily totals, top three conversations and models, a gate view with three full left-to-right beams (grey before masking, blue after) and one grey particle per beam, plus the masking ledger and detail pages.
-- **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier (read-only / ask / full access), or import/remove one from a file.
-- **Security posture**: the panel uses the host's authenticated `/api` connection RPC; the plugin serves no HTTP route of its own. Master password and API keys are write-only fields.
+- **Real-time sync & cache**: SignalR WebSocket updates, with automatic polling fallback and upgrade retries; an encrypted local cache plus revision probing speeds up cold starts.
+- **Vault panel**: sections, search, paging, entry details, TOTP countdown, copy, create/edit, archive/trash/restore and folder moves; write actions follow the plugin's access tier.
+- **Masking & log scrubbing**: passwords, TOTP codes and card data are returned as stable placeholders, fetchable per entry and field; plaintext in session logs is periodically replaced with `[REDACTED:BW]`, with incremental and immediate sweeps.
+- **Masking dashboard**: daily totals, top conversations/models and a drill-down masking ledger.
+- **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier, with import, remove and temporary-file cleanup; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
+- **Permissions & security**: read-only / ask / full-access tiers; when the DSH session is `workspace-write` or `read-only`, writes and passkey exports still go through host approval. The panel uses the host's authenticated `/api` RPC; the plugin serves no HTTP route of its own. Master password and API keys are write-only fields.
+- **Settings page**: connection, sign-in, two-factor and plugin permissions in one place, for both self-hosted servers and Bitwarden Cloud.
 
 ## Install
 
@@ -44,13 +44,15 @@ Open **Settings → Plugins → dsh-vaultwarden**:
 | `accessMode` | `readonly` / `ask` / `auto` for model-driven writes |
 | `maskMode` / `sweepMode` | Placeholder masking and log-scrubbing switches |
 
+When the DSH session is `workspace-write` / `read-only` (`approval: ask`), writes and passkey exports still require host approval even if the plugin is set to `auto`. Password/TOTP reads, log scrubbing and passkey temporary-file cleanup do not require approval; the latter two are forced security cleanups.
+
 `DSH_BITWARDEN_*` environment variables and profile composition are also supported. See [docs/ui-design.md](docs/ui-design.md) for every field.
 
 ## Tools
 
 `bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
 
-Passkeys: `bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
+Passkeys: `bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_cleanup` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
 
 `bitwarden_sweep` immediately scrubs Bitwarden plaintext from local session logs.
 
