@@ -8,6 +8,10 @@ npm-debug.log*
 
 # Internal audit/design notes (not part of the package)
 .research/
+.audit/
+
+# Local tool state (not part of the package)
+.local/
 
 # Local icon preview rendered while designing the plugin icon (not part of the package)
 .icon-preview.png
