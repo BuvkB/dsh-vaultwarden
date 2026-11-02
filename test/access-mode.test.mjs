@@ -30,7 +30,7 @@ const check = (label, condition, detail = '') => {
 }
 
 /** Run apply() with a given accessMode and hand back what it registered. */
-function boot(accessMode) {
+function boot(accessMode, options = {}) {
   const tools = []
   const listeners = []
   const refs = {}
@@ -41,6 +41,9 @@ function boot(accessMode) {
       listeners.push({ event, handler })
       return () => {}
     },
+    get: (service) => service === 'approval' && options.hostApprovalPolicy
+      ? { effectivePolicy: () => options.hostApprovalPolicy }
+      : undefined,
     plugin: () => ({ name: 'VaultGateway' }),
     systemPrompt: { section: () => () => {} },
     tools: { register: (tool) => (tools.push(tool), () => {}) },
@@ -146,6 +149,27 @@ async function main() {
     const passkeyText = JSON.stringify(passkeyAsk?.displayReason ?? {})
     check('passkey approval names the target site', passkeyText.includes('accounts.google.com'), passkeyText)
     check('passkey approval does not expose private-key wording', !/私钥|0600|导出/.test(passkeyText), passkeyText)
+  }
+
+  // ── host workspace-write (approval=ask) gates writes even in auto tier ────
+  {
+    const { listeners } = boot('auto', { hostApprovalPolicy: 'ask' })
+    const gate = listeners.find((entry) => entry.event === 'tools/pre-execute')
+    let reached = false
+    const write = await gate.handler({ name: 'bitwarden_create', agent: { session: {} } }, async () => {
+      reached = true
+      return { kind: 'allow' }
+    })
+    check('host workspace-write gates a write even in auto tier', write?.kind === 'ask', JSON.stringify(write))
+    check('the host-gated write does not run before approval', reached === false)
+    for (const name of ['bitwarden_get', 'bitwarden_reveal', 'bitwarden_sweep', 'bitwarden_passkey_cleanup']) {
+      let readReached = false
+      const read = await gate.handler({ name, agent: { session: {} } }, async () => {
+        readReached = true
+        return { kind: 'allow' }
+      })
+      check(`host workspace-write leaves ${name} without approval`, read?.kind === 'allow' && readReached === true, JSON.stringify(read))
+    }
   }
 
   // ── host settings edits are volatile: the live gate must follow them ───────

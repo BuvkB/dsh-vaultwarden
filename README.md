@@ -44,6 +44,8 @@ dsh plugin --profile web add dsh-vaultwarden@latest
 | `accessMode` | `readonly` / `ask` / `auto`，控制模型工具的写回权限 |
 | `maskMode` / `sweepMode` | 占位符脱敏与日志擦除开关 |
 
+DSH 会话权限为 `workspace-write` / `read-only`（`approval: ask`）时，即使插件 `accessMode` 为 `auto`，写操作与通行密钥导出也会走审批；密码/TOTP 读取、日志擦除与通行密钥临时文件清理不需要审批，后两者属于强制执行的安全清理。
+
 也支持 `DSH_BITWARDEN_*` 环境变量和 profile 组合配置。完整字段见 [docs/ui-design.md](docs/ui-design.md)。
 
 ## 工具

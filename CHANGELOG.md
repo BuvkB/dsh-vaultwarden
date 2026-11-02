@@ -4,6 +4,13 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 修复
+
+- 权限审批按宿主模式联动：DSH 处于 `workspace-write` / `read-only`（`approval: ask`）时，即使插件档为 `auto`，写操作与通行密钥导出也会弹出审批；插件 `readonly` 保持拒绝。
+- 密码读取、TOTP 读取、日志擦除（`bitwarden_sweep`）与通行密钥临时文件清理（`bitwarden_passkey_cleanup`）明确不进入审批门禁；后两者属于安全清理，强制执行。
+
 ## [0.14.1] — 2026-11-02
 
 ### 修复
