@@ -512,6 +512,15 @@ export async function startMockServer(options = {}) {
       }
 
       if (req.url.startsWith('/identity/connect/token') && req.method === 'POST') {
+        // Bitwarden Cloud only accepts its own client names in this header.
+        // An unknown name gets an empty-body 429 — not a rate limit; retrying
+        // can never succeed. Allow a missing header (the official CLI and some
+        // third-party clients omit it) and mirror the cloud's behaviour.
+        const clientName = String(req.headers['bitwarden-client-name'] ?? '').trim()
+        if (clientName && !new Set(['cli', 'desktop', 'browser', 'mobile', 'web']).has(clientName)) {
+          res.writeHead(429)
+          return res.end()
+        }
         const grant = form.get('grant_type')
         stats.tokenGrants.push(grant)
         const issue = (clientId = 'cli') => {

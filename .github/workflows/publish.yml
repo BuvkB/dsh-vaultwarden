@@ -26,4 +26,12 @@ jobs:
       - name: Syntax check
         run: for f in lib/*.js; do node --check "$f"; done
       - name: Publish (OIDC, tokenless)
-        run: npm publish
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+            # A release candidate must never become npm's `latest`; the
+            # marketplace reads dist-tags.latest to decide whether to offer an
+            # update, so publishing an rc as latest would push it to everyone.
+            npm publish --tag rc
+          else
+            npm publish
+          fi

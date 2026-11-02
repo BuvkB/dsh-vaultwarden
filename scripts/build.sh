@@ -109,6 +109,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== offline end-to-end test (mock Vaultwarden) ==="
   node test/mock-e2e.test.mjs
 
+  # Official Bitwarden cloud only accepts its own client names in the
+  # bitwarden-client-name header; an unknown name is answered with an empty
+  # HTTP 429 that is not a rate limit. Keep the wire identity pinned.
+  echo "=== Bitwarden client-name contract test (official cloud whitelist) ==="
+  node test/client-name.test.mjs
+
   # KDF units and pinned vectors. This one exists because the mock server below
   # used to repeat the client's own MiB/KiB mistake, so the end-to-end suite
   # agreed with a broken client and could never catch it.
