@@ -1,0 +1,29 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+      - name: npm >= 11.5.1 for trusted publishing
+        run: npm install -g npm@latest
+      - name: Install optional runtime dependency
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Syntax check
+        run: for f in lib/*.js; do node --check "$f"; done
+      - name: Publish (OIDC, tokenless)
+        run: npm publish

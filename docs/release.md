@@ -29,7 +29,8 @@ git push origin main
 git tag -a v0.8.2 -m 'v0.8.2：...' && git push origin v0.8.2
 
 # 4. 发布到 npm（市场更新提示的来源，漏了这一步用户就看不到更新）
-npm publish                            # 需要 ~/.npmrc 里的 npmjs token
+#    推 v* tag 后 GitHub Actions 走 Trusted Publishing（OIDC）自动发布，无需 token、无需人工批准。
+#    工作流见 .github/workflows/publish.yml；若它没有触发，本地 npm publish 只作兜底。
 npm view dsh-vaultwarden version       # 确认 latest 已是新版本
 
 # 5. 打包
