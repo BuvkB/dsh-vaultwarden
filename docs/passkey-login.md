@@ -18,7 +18,8 @@ bitwarden_passkey_export <条目 id 或名称>
 
 - 返回 `path`（不返回私钥），文件权限 0600，含 `cdp` 块；
 - 受 `accessMode` 控制：`readonly` 拒绝、`ask` 走 DSH 对话审批、`auto` 直接执行；
-- 超过 24 小时的导出文件会在下一次导出时自动清理；用后仍建议立即删除。
+- 超过 24 小时的导出文件会在下一次导出时自动清理；用后仍建议立即删除；
+- 每次导出会向 `passkeys/audit.jsonl` 追加一条 0600 审计记录：时间、条目 id、rpId、权限档与来源（model/panel），不含私钥。
 
 ## 3. 注入浏览器（一个 CDP 会话内完成）
 

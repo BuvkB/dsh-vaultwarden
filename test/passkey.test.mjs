@@ -66,7 +66,7 @@ async function main() {
     writeFileSync(stale, '{"old":true}')
     const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
     utimesSync(stale, old, old)
-    const exported = await client.exportPasskey('cipher-github', '', undefined, { outputDir: exportDir })
+    const exported = await client.exportPasskey('cipher-github', '', undefined, { outputDir: exportDir, surface: 'tool' })
     check('a stale export file is pruned on the next export', !existsSync(stale))
     check('the export reports its expiry', typeof exported.expiresAt === 'string' && Date.parse(exported.expiresAt) > Date.now())
     check('export reports a path', typeof exported.path === 'string' && exported.path.length > 0)
@@ -81,6 +81,12 @@ async function main() {
     check('the user handle is decoded from base64url to base64', document.cdp.userHandle === Buffer.from('github-user-1').toString('base64'))
     check('the counter becomes signCount', document.cdp.signCount === 0)
     check('discoverable becomes isResidentCredential', document.cdp.isResidentCredential === true)
+    // The audit trail answers who exported what, when — never the key itself.
+    const auditLines = readFileSync(join(exportDir, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    const audit = auditLines.at(-1)
+    check('the export writes an audit record', Boolean(audit) && typeof audit.at === 'string' && audit.entryId === 'cipher-github' && audit.rpId === 'github.com', JSON.stringify(audit))
+    check('the audit records the actor and access tier', audit.actor === 'model' && audit.accessMode === 'readonly', JSON.stringify({ actor: audit.actor, accessMode: audit.accessMode }))
+    check('the audit carries no private key material', !JSON.stringify(audit).includes(document.cdp.privateKey.slice(0, 16)) && !('keyValue' in audit) && !('privateKey' in audit))
 
     // A reprompt-flagged entry stays gated: its passkey metadata and private
     // key are part of the entry's data, so the same master-password proof is
