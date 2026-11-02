@@ -4,6 +4,17 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] — 2026-11-02
+
+### 修复
+
+- 面板权限档刷新后回退：标题行权限菜单与设置页“插件权限”卡变更权限后，统一更新 React state、`setup.config`、模块内的 `openCache.config` 与 `ACCESS_MODE_KEY`；此前下一次 `load()`（切换分区、关闭设置弹窗或重新打开面板）会用旧缓存把「每次确认」重新画回「完全权限」。
+- `bitwarden_status` 与通行密钥导出审计读旧权限：`setAccessMode` 现在同步更新活跃 `VaultClient.settings.accessMode`（但不触发会清空会话与保险库的 `reconfigure`）；状态报告和审计记录不再把 `ask` 写成 `auto`。
+- DSH 设置页的 `.volatile()` 字段不生效：监听 `loader/volatile-update`，重新解析配置并同步到运行中的插件（账户/服务器变化才走完整 reconfigure）；权限、脱敏、擦除与缓存相关设置不再等到插件重启才生效。
+- 通行密钥导出的审批文案：只说明目标站点与“是否允许调用密码库”，不再在确认框里提“导出私钥/0600 文件”。
+- 新增 `bitwarden_passkey_cleanup`：用完后可直接删除导出的临时通行密钥文件（可指定 path，省略则清理全部），不触发审批，且只允许删除插件 `passkeys/` 目录内的 `.json`。
+- 新增权限菜单缓存回归测试、volatile 配置更新测试、通行密钥清理与审批文案测试。
+
 ## [0.14.0] — 2026-11-02
 
 ### 功能

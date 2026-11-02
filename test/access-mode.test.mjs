@@ -15,6 +15,7 @@
  * Run: node test/access-mode.test.mjs
  */
 import { Config, apply } from '../lib/index.js'
+import { VaultClient } from '../lib/vault.js'
 
 let passed = 0
 let failed = 0
@@ -32,6 +33,7 @@ const check = (label, condition, detail = '') => {
 function boot(accessMode) {
   const tools = []
   const listeners = []
+  const refs = {}
   const AVAILABLE = new Set(['settings', 'tools', 'systemPrompt', 'webServer', 'slots', 'locale'])
   const fakeCtx = {
     effect: (fn) => fn(),
@@ -53,14 +55,22 @@ function boot(accessMode) {
     },
   }
   const write = Symbol.for('cosmokit.volatile.write')
-  const ref = (value) => Object.freeze({ get: () => value, [write]: () => {} })
+  const ref = (name, value) => {
+    let current = value
+    const reference = Object.freeze({
+      get: () => current,
+      [write]: (next) => { current = next },
+    })
+    refs[name] = reference
+    return reference
+  }
   apply(fakeCtx, {
-    serverUrl: ref('https://vault.example.com'),
-    email: ref('me@example.com'),
-    masterPassword: ref('secret'),
-    accessMode: ref(accessMode),
+    serverUrl: ref('serverUrl', 'https://vault.example.com'),
+    email: ref('email', 'me@example.com'),
+    masterPassword: ref('masterPassword', 'secret'),
+    accessMode: ref('accessMode', accessMode),
   })
-  return { tools, listeners }
+  return { tools, listeners, refs }
 }
 
 /** Collect the tools whose execute() is callable without a live vault. */
@@ -129,6 +139,35 @@ async function main() {
     check('ask does not run the write before approval', reached === false)
     const forRead = await gate.handler({ name: 'bitwarden_find' }, next)
     check('ask leaves read calls untouched', forRead?.kind === 'allow' && reached === true, JSON.stringify(forRead))
+    const passkeyAsk = await gate.handler({ name: 'bitwarden_passkey_export', arguments: { name: 'accounts.google.com' } }, async () => {
+      reached = true
+      return { kind: 'allow' }
+    })
+    const passkeyText = JSON.stringify(passkeyAsk?.displayReason ?? {})
+    check('passkey approval names the target site', passkeyText.includes('accounts.google.com'), passkeyText)
+    check('passkey approval does not expose private-key wording', !/私钥|0600|导出/.test(passkeyText), passkeyText)
+  }
+
+  // ── host settings edits are volatile: the live gate must follow them ───────
+  {
+    const { listeners, refs } = boot('readonly')
+    const volatile = listeners.find((entry) => entry.event === 'loader/volatile-update')
+    check('registers a loader/volatile-update listener', Boolean(volatile), listeners.map((entry) => entry.event).join(','))
+    refs.accessMode[Symbol.for('cosmokit.volatile.write')]('ask')
+    await volatile.handler()
+    const gate = listeners.find((entry) => entry.event === 'tools/pre-execute')
+    let reached = false
+    const decision = await gate.handler({ name: 'bitwarden_create' }, async () => ((reached = true), { kind: 'allow' }))
+    check('a host-settings accessMode edit reaches the write gate', decision?.kind === 'ask', JSON.stringify(decision))
+    check('the gate still does not run the write', reached === false)
+  }
+
+  // ── the live client reports the tier the panel changed ────────────────────
+  {
+    const client = new VaultClient({ serverUrl: 'https://vault.example.com', email: 'me@example.com', masterPassword: 'secret', accessMode: 'auto' })
+    check('a new client starts at its configured tier', client.settings.accessMode === 'auto', client.settings.accessMode)
+    client.setAccessMode('ask')
+    check('setAccessMode updates the live client tier without invalidating it', client.settings.accessMode === 'ask', client.settings.accessMode)
   }
 
   // ── auto: writes go straight through (the guard is the only gate) ──────────

@@ -90,6 +90,10 @@ if (typeof globalThis.document === 'undefined') {
       get textContent() { return panelSheetText },
     }),
     head: { appendChild: () => {} },
+    // The permission menu closes on an outside pointerdown / Escape; the panel
+    // registers those only while the menu is open.
+    addEventListener: () => {},
+    removeEventListener: () => {},
   }
 }
 
@@ -321,6 +325,7 @@ function makeRpc(overrides = {}) {
       }
       if (method === 'totp') return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 20, remaining: 20, algorithm: 'SHA1' } } }
       if (method === 'config') return { ok: true, value: CONFIG_VALUE }
+      if (method === 'setAccessMode') return { ok: true, value: { ...CONFIG_VALUE, accessMode: payload?.args?.mode ?? 'readonly' } }
       if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
       if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
       // Default: a stored session, so the panel renders the vault. The host
@@ -3369,6 +3374,36 @@ async function main() {
     check('reopening does not re-ask the host for a session', bootsOnReopen === 0, 'boot calls on reopen: ' + String(bootsOnReopen))
     await act(async () => { second.renderer.unmount() })
     mod.__resetOpenCache()
+  }
+
+  // ── changing the tier must update every cache the next read paints from ───
+  // The permission menu used to update only React state; a later `load()`
+  // (a section switch, or closing the settings form) replayed
+  // `openCache.config` and snapped the menu back to the old tier.
+  {
+    const modeRpc = makeRpc({
+      boot: () => bootWith({ ...CONFIG_VALUE, accessMode: 'auto' }, true, AUTHED_SESSION),
+      setAccessMode: (args) => ({ ok: true, value: { ...CONFIG_VALUE, accessMode: args.mode } }),
+    })
+    mod.__resetOpenCache()
+    const panel = await mountPanel(mod, {}, modeRpc)
+    await flush()
+    const menu = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu'] !== undefined)[0]
+    const menuText = () => String(menu()?.findAllByType('span')?.[0]?.props?.children ?? '')
+    check('the permission menu starts at the host tier', menuText().includes('完全权限'), menuText())
+    await act(async () => { menu().props.onClick() })
+    await flush()
+    const askOption = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'ask')[0]
+    await act(async () => { askOption.props.onClick() })
+    await flush()
+    check('choosing 每次确认 updates the menu', menuText().includes('每次确认'), menuText())
+    // A section switch runs the same load() path a reopen/refresh takes. The
+    // cached config must already carry the new tier or the old one repaints.
+    const favRow = panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === 'favorites')[0]
+    await act(async () => { favRow.props.onClick() })
+    await flush(120)
+    check('a subsequent load keeps 每次确认', menuText().includes('每次确认'), menuText())
+    await act(async () => { panel.renderer.unmount() })
   }
 
   // ── the second page: passwords, then the masking trail ───────────────────

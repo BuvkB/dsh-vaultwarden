@@ -18,7 +18,8 @@ bitwarden_passkey_export <条目 id 或名称>
 
 - 返回 `path`（不返回私钥），文件权限 0600，含 `cdp` 块；
 - 受 `accessMode` 控制：`readonly` 拒绝、`ask` 走 DSH 对话审批、`auto` 直接执行；
-- 超过 24 小时的导出文件会在下一次导出时自动清理；用后仍建议立即删除；
+- 用完后立即执行 `bitwarden_passkey_cleanup`（可传 `path`；不传则清理全部导出）删除临时文件；该清理不需要审批，只作用于插件自己的 `passkeys/` 目录；
+- 超过 24 小时的遗留导出文件会在下一次导出时自动清理；
 - 每次导出会向 `passkeys/audit.jsonl` 追加一条 0600 审计记录：时间、条目 id、rpId、权限档与来源（model/panel），不含私钥；「脱敏轨迹」页底部会显示最近 20 条导出记录。
 
 ## 3. 注入浏览器（一个 CDP 会话内完成）
@@ -67,7 +68,7 @@ await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: doc.cdp 
 1. 用插件导出 `telegram.org` 条目的通行密钥；
 2. 打开 `https://web.telegram.org/a/`；
 3. 在同一 `ego_script` 里执行上面的 WebAuthn 设置，然后点「LOG IN WITH PASSKEY」；
-4. 登录后立即删除导出文件。
+4. 登录后调用 `bitwarden_passkey_cleanup`（不传 `path` 会清理全部导出）删除导出文件。
 
 ## 5. 排错
 
@@ -76,6 +77,7 @@ await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: doc.cdp 
 | `The Virtual Authenticator Environment has not been enabled for this session` | 认证器只在当前 CDP 会话有效，跨调用丢失 | 把 enable/建认证器/装凭据/点击放进同一次 `ego_script` |
 | `OperationError: A request is already pending.` | 上一次 WebAuthn 请求还挂着 | 重新加载页面，再点一次；不要连续点 |
 | 点击无反应 | 页面还没渲染出登录按钮 | 用 `ego_navigate` 等页面加载完成后再执行脚本 |
+| `the user rejected tool "bitwarden_passkey_export"` | 插件处于 `ask`，但宿主会话审批策略是 `never`（例如 `danger-full-access` 预设），审批请求被自动拒绝，不会出现窗口 | 把会话权限预设切到带 `approval: ask` 的预设（如 workspace-write / read-only，或自定义 danger-full-access + approval: ask） |
 | `passkey_proof_required` | 运行中的插件还是旧模块 | 重启插件/宿主，或重新保存插件设置触发热加载 |
 
 导出文件内含私钥：只通过 0600 路径交接，不要把文件内容打印到对话或日志。

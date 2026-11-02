@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { VaultClient, VaultError } from '../lib/vault.js'
 import { VaultMutations } from '../lib/mutations.js'
+import { removePasskeyExports } from '../lib/passkey.js'
 import { EMAIL, PASSWORD, startMockServer } from './mock-server.mjs'
 
 let passed = 0
@@ -87,6 +88,18 @@ async function main() {
     check('the export writes an audit record', Boolean(audit) && typeof audit.at === 'string' && audit.entryId === 'cipher-github' && audit.rpId === 'github.com', JSON.stringify(audit))
     check('the audit records the actor and access tier', audit.actor === 'model' && audit.accessMode === 'readonly', JSON.stringify({ actor: audit.actor, accessMode: audit.accessMode }))
     check('the audit carries no private key material', !JSON.stringify(audit).includes(document.cdp.privateKey.slice(0, 16)) && !('keyValue' in audit) && !('privateKey' in audit))
+
+    // Cleanup is deliberately available without an approval prompt (it only
+    // reduces exposure) and is scoped to the plugin's own export directory.
+    const cleanupPath = join(exportDir, 'cleanup-test.json')
+    writeFileSync(cleanupPath, '{"temporary":true}', { mode: 0o600 })
+    const cleaned = removePasskeyExports(exportDir, cleanupPath)
+    check('cleanup removes the named export without touching the vault', cleaned.count === 1 && !existsSync(cleanupPath), JSON.stringify(cleaned))
+    const outside = join(tmpdir(), 'not-a-vault-export.json')
+    writeFileSync(outside, '{"outside":true}', { mode: 0o600 })
+    const refused = removePasskeyExports(exportDir, outside)
+    check('cleanup refuses a path outside the plugin export directory', refused.count === 0 && existsSync(outside), JSON.stringify(refused))
+    rmSync(outside, { force: true })
 
     // A reprompt-flagged entry stays gated: its passkey metadata and private
     // key are part of the entry's data, so the same master-password proof is
