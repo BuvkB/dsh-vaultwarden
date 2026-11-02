@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 功能
 
 - 通行密钥（passkey）：读取并解密条目里的 fido2Credentials，`bitwarden_passkey_list` 列出 rpId、用户名、是否可发现、创建时间与算法。
-- `bitwarden_passkey_export` 把通行密钥导出为 0600 权限的 WebAuthn 凭据文件（CDP 形状：credentialId/privateKey/rpId/userHandle/signCount），只返回路径；导出前须由用户在面板里验证主密码。
+- `bitwarden_passkey_export` 把通行密钥导出为 0600 权限的 WebAuthn 凭据文件（CDP 形状：credentialId/privateKey/rpId/userHandle/signCount），只返回路径；导出受 accessMode 控制（readonly 拒绝、ask 在对话中请求授权、auto 直接执行）。
 - `bitwarden_passkey_import` 从文件导入通行密钥，按条目 item key 加密写回；`bitwarden_passkey_remove` 移除指定通行密钥；两者都受 accessMode 写权限门禁。
-- 面板详情页新增「通行密钥」折叠区：元数据列表，验证主密码后可导出。
+- 面板详情页新增「通行密钥」折叠区：元数据列表，按插件权限导出。
+- 设置页新增「插件权限」卡：可一键授予完全权限（写操作与通行密钥导出不再逐次确认），也可收回为每次确认；对话内授权走 DSH 审批缝。
 
 - 脱敏轨迹页的门禁看板可交互：会话/模型前三名的行变成可点按的开关，点按后下方流水收窄为该会话或该模型的脱敏记录——行数、页数、总数都按收窄后的列表计（筛选在服务端完成，`vw/trail` 新增 `sessionKey` / `modelKey` 参数，空模型串表示「未记录模型」一档），分页照常可用。回到全部有两条路：再点一次同一行，或点流水标题旁的蓝色短胶囊「按会话筛选 / 按模型筛选 ✕」（完整名字在 tooltip）；看板与头条的数字始终描述整个时间窗口，不随筛选移动。
 - 门禁看板的 1/2/3 名次徽章改为彩色：沿用明细页五步点的低饱和配方（蓝 / 青 / 绿，一名一色），两列同秩同色——会话第 1 名与模型第 1 名读作同一个名次。

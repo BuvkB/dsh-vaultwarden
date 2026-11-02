@@ -58,19 +58,7 @@ async function main() {
     const viaGet = JSON.parse(await client.get('cipher-github', 'passkeys'))
     check('field=passkeys projects metadata only', viaGet.passkeys?.[0]?.rpId === 'github.com' && !('keyValue' in viaGet.passkeys[0]))
 
-    // 2. export needs the human proof -----------------------------------------
-    let refused = null
-    try {
-      await client.exportPasskey('cipher-github', '', undefined, { outputDir: exportDir })
-    } catch (error) {
-      refused = error
-    }
-    check('export without a master-password proof is refused', refused instanceof VaultError && refused.code === 'passkey_proof_required', String(refused?.code))
-
-    const proof = await client.authorizeReprompt(PASSWORD, undefined, { id: 'cipher-github' })
-    check('the panel proof is accepted', proof?.authorized === true, JSON.stringify(proof))
-
-    // 3. export writes a 0600 CDP-shaped file ---------------------------------
+    // 2. export writes a 0600 CDP-shaped file ---------------------------------
     const exported = await client.exportPasskey('cipher-github', '', undefined, { outputDir: exportDir })
     check('export reports a path', typeof exported.path === 'string' && exported.path.length > 0)
     check('export never returns the private key', !('privateKey' in exported) && !JSON.stringify(exported).includes(server.fixtures.passkeyPkcs8.toString('base64').slice(0, 24)))
@@ -84,6 +72,21 @@ async function main() {
     check('the user handle is decoded from base64url to base64', document.cdp.userHandle === Buffer.from('github-user-1').toString('base64'))
     check('the counter becomes signCount', document.cdp.signCount === 0)
     check('discoverable becomes isResidentCredential', document.cdp.isResidentCredential === true)
+
+    // A reprompt-flagged entry stays gated: its passkey metadata and private
+    // key are part of the entry's data, so the same master-password proof is
+    // required before any export.
+    let repromptRefused = null
+    try {
+      await client.exportPasskey('cipher-reprompt', '', undefined, { outputDir: exportDir })
+    } catch (error) {
+      repromptRefused = error
+    }
+    check('a reprompt entry refuses passkey export until its proof', repromptRefused instanceof VaultError && repromptRefused.code === 'reprompt_required', String(repromptRefused?.code))
+    const repromptProof = await client.authorizeReprompt(PASSWORD, undefined, { id: 'cipher-reprompt' })
+    check('the reprompt proof is accepted for the passkey entry', repromptProof?.authorized === true, JSON.stringify(repromptProof))
+    const repromptExport = await client.exportPasskey('cipher-reprompt', '', undefined, { outputDir: exportDir })
+    check('the proof opens the reprompt passkey export', repromptExport.ok === true && repromptExport.passkey.rpId === 'reprompt.example')
 
     // 4. import round trip ----------------------------------------------------
     const created = await mutations.create({ name: 'Passkey 导入测试', username: 'import-user', notes: '保留备注', favorite: true }, undefined)
@@ -107,7 +110,6 @@ async function main() {
     }
     check('a duplicate credential id is refused', duplicate instanceof VaultError && duplicate.code === 'passkey_exists', String(duplicate?.code))
 
-    await client.authorizeReprompt(PASSWORD, undefined, { id: created.id })
     const reExported = await client.exportPasskey(created.id, '', undefined, { outputDir: exportDir })
     const again = JSON.parse(readFileSync(reExported.path, 'utf8'))
     check('the re-exported private key matches the original', again.cdp.privateKey === document.cdp.privateKey)

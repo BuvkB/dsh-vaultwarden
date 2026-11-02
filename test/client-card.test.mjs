@@ -1398,7 +1398,12 @@ async function main() {
   // error code, which does not survive the RPC boundary).
   const unconfiguredConfig = { ok: true, value: { serverUrl: '', email: '', hasMasterPassword: false, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' } }
   const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '密码库尚未配置完整' } }
-  const setupRpc = makeRpc({ boot: () => bootWith(unconfiguredConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
+  const setupRpc = makeRpc({
+    boot: () => bootWith(unconfiguredConfig.value, false),
+    list: () => notConfiguredError,
+    status: () => notConfiguredError,
+    setAccessMode: (args) => ({ ok: true, value: { ...unconfiguredConfig.value, accessMode: args.mode } }),
+  })
   const unconfigured = await mountPanel(mod, {}, setupRpc)
   const setupText = JSON.stringify(unconfigured.renderer.toJSON())
   check('unconfigured state offers the guided setup form', setupText.includes('连接 Vaultwarden') && setupText.includes('服务器地址'))
@@ -1428,6 +1433,19 @@ async function main() {
   })
   const configureCall = setupRpc.calls.find((call) => call.method === 'configure')
   check('setup writes through vw/configure', Boolean(configureCall) && configureCall.args.serverUrl === 'https://vault.example.com' && configureCall.args.masterPassword === 'master-pass-123', JSON.stringify(configureCall?.args))
+
+  // The plugin permission card lives on the settings form: granting full
+  // access is a two-step action (ask, then confirm) and goes through its own
+  // RPC, never through the generic `configure` writer.
+  const setupButtons = () => unconfigured.renderer.root.findAllByType('button')
+  check('setup shows the plugin permission card', setupText.includes('插件权限') && setupText.includes('授予完全权限'))
+  await act(async () => { setupButtons().find((node) => node.props.children === '授予完全权限').props.onClick() })
+  check('granting full access asks for confirmation', JSON.stringify(unconfigured.renderer.toJSON()).includes('确认授予完全权限？'))
+  await act(async () => { setupButtons().find((node) => node.props.children === '确认开启').props.onClick() })
+  await act(async () => { await sleep(40) })
+  const permissionCall = setupRpc.calls.find((call) => call.method === 'setAccessMode')
+  check('confirming sends setAccessMode(auto, confirm=true)', permissionCall?.args?.mode === 'auto' && permissionCall?.args?.confirm === true, JSON.stringify(permissionCall?.args))
+  check('the card reports the new tier', JSON.stringify(unconfigured.renderer.toJSON()).includes('完全权限'))
   await act(async () => {
     unconfigured.renderer.unmount()
   })

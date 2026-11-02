@@ -17,7 +17,7 @@ A Vaultwarden / Bitwarden integration for DeepSeek Harness. Every session can se
 - **Masking**: passwords, TOTP codes and card data are returned as stable placeholders; plaintext can be fetched per entry and field only when needed.
 - **Log scrubbing**: Bitwarden plaintext in session logs is replaced with `[REDACTED:BW]`; incremental scanning and immediate sweep are supported.
 - **Masking dashboard**: daily totals, top three conversations and models, a gate view with three full left-to-right beams (grey before masking, blue after) and one grey particle per beam, plus the masking ledger and detail pages.
-- **Passkeys**: read passkey metadata from entries; after a master-password proof, export a 0600 WebAuthn credential file, or import/remove one from a file.
+- **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier (read-only / ask / full access), or import/remove one from a file.
 - **Security posture**: the panel uses the host's authenticated `/api` connection RPC; the plugin serves no HTTP route of its own. Master password and API keys are write-only fields.
 
 ## Install
