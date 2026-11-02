@@ -50,7 +50,7 @@ dsh plugin --profile web add dsh-vaultwarden@latest
 
 `bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
 
-通行密钥：`bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`
+通行密钥：`bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`；登录配方见 [docs/passkey-login.md](docs/passkey-login.md)。
 
 另有 `bitwarden_sweep` 立即擦除本地会话日志中的明文。
 

@@ -50,7 +50,7 @@ Open **Settings → Plugins → dsh-vaultwarden**:
 
 `bitwarden_find` · `bitwarden_get` · `bitwarden_reveal` · `bitwarden_status` · `bitwarden_sync` · `bitwarden_folders` · `bitwarden_create` · `bitwarden_update` · `bitwarden_delete` · `bitwarden_restore`
 
-Passkeys: `bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`
+Passkeys: `bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_passkey_import` · `bitwarden_passkey_remove`; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
 
 `bitwarden_sweep` immediately scrubs Bitwarden plaintext from local session logs.
 

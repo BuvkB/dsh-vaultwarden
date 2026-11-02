@@ -4,7 +4,7 @@
  *
  * Run: node test/passkey.test.mjs
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { VaultClient, VaultError } from '../lib/vault.js'
@@ -53,13 +53,22 @@ async function main() {
     check('the rpId is decrypted', meta.rpId === 'github.com', JSON.stringify(meta))
     check('the user name is decrypted', meta.userName === 'octocat@example.com')
     check('discoverable is a boolean, not the stored string', meta.discoverable === true)
+    check('a discoverable passkey is marked usable for username-less login', meta.usableForLogin === true)
     check('the credential id is the raw id in base64', meta.credentialId === server.fixtures.passkeyCredentialId.toString('base64'), meta.credentialId)
     check('the metadata carries no private key', !('keyValue' in meta) && !('privateKey' in meta))
     const viaGet = JSON.parse(await client.get('cipher-github', 'passkeys'))
     check('field=passkeys projects metadata only', viaGet.passkeys?.[0]?.rpId === 'github.com' && !('keyValue' in viaGet.passkeys[0]))
 
     // 2. export writes a 0600 CDP-shaped file ---------------------------------
+    // A forgotten export must not live forever: an old file in the same private
+    // directory is pruned before the new one is written.
+    const stale = join(exportDir, 'stale-export.json')
+    writeFileSync(stale, '{"old":true}')
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+    utimesSync(stale, old, old)
     const exported = await client.exportPasskey('cipher-github', '', undefined, { outputDir: exportDir })
+    check('a stale export file is pruned on the next export', !existsSync(stale))
+    check('the export reports its expiry', typeof exported.expiresAt === 'string' && Date.parse(exported.expiresAt) > Date.now())
     check('export reports a path', typeof exported.path === 'string' && exported.path.length > 0)
     check('export never returns the private key', !('privateKey' in exported) && !JSON.stringify(exported).includes(server.fixtures.passkeyPkcs8.toString('base64').slice(0, 24)))
     const mode = statSync(exported.path).mode & 0o777
