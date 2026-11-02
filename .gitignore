@@ -12,6 +12,7 @@ npm-debug.log*
 
 # Local tool state (not part of the package)
 .local/
+.tmp/
 
 # Local icon preview rendered while designing the plugin icon (not part of the package)
 .icon-preview.png
