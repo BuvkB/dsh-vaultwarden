@@ -137,11 +137,19 @@ async function main() {
     const fields = schema?.dict ?? {}
     return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
   })())
-  check('registers the prompt guidance section', sections.some((section) => section.name === 'bitwarden-vault' && /密码库/.test(section.text) && section.text.length <= 400))
-  // Regression: the mask guidance quotes a literal `{{BW_<类型>_<标签>}}`. The host
-  // interpolates every section by default and throws `malformed prompt variable
-  // reference` on any `{{…}}` that is not `^[a-z][a-z0-9_]*$`, which aborted the
-  // whole prompt assembly (first turn failed). The section must opt out.
+  const promptSection = sections.find((section) => section.name === 'bitwarden-vault')
+  check('prompt guidance is English and within the 400-char host limit', Boolean(promptSection) && /Bitwarden/.test(promptSection.text) && !/[\u4e00-\u9fff]/.test(promptSection.text) && promptSection.text.length <= 400, `${promptSection?.text.length ?? 'missing'} chars`)
+  // The system prompt carries policy only; per-tool mechanics stay in the tool
+  // descriptions the model receives every step. Guard that these two gates did
+  // not fall between the two places when the prompt was shortened.
+  const getDescription = tools.find((tool) => tool.name === 'bitwarden_get').description
+  check('mask/reveal protocol lives in the get tool description', /bitwarden_reveal/.test(getDescription) && /账号锁定/.test(getDescription))
+  const passkeyExportDescription = tools.find((tool) => tool.name === 'bitwarden_passkey_export').description
+  check('passkey export policy lives in its tool description', /accessMode/.test(passkeyExportDescription) && /0600/.test(passkeyExportDescription) && /bitwarden_passkey_cleanup/.test(passkeyExportDescription))
+  // Regression: a literal `{{…}}` in the section text must never reach the
+  // host interpolator — a malformed reference aborts the whole prompt assembly
+  // (first turn failed). Keep the section opted out even though the current
+  // English text has no braces.
   check('prompt guidance section opts out of host interpolation', sections.every((section) => section.name !== 'bitwarden-vault' || section.interpolate === false), JSON.stringify(sections.map((s) => ({ name: s.name, interpolate: s.interpolate }))))
   check('registers effects with labels (cleanup contract)', effects.length >= 8 && effects.every((label) => typeof label === 'string' && label.startsWith('dsh-vaultwarden:')), `${effects.length} effects`)
   check('mounts the Remote gateway instead of an HTTP route', plugins.length === 1 && plugins[0].plugin?.name === 'VaultGateway' && typeof plugins[0].config?.getClient === 'function', JSON.stringify(plugins.map((entry) => entry.plugin?.name)))

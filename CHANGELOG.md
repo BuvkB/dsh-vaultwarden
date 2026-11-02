@@ -4,6 +4,12 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 优化
+
+- 系统提示词改为英文并压至 400 字符内（现 368）：只保留跨工具策略，脱敏/通行密钥细节归入对应工具描述；不再随 maskMode 追加。
+
 ## [0.14.2-rc.1] — 2026-11-02
 
 ### 优化
