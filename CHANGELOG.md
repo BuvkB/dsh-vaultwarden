@@ -4,16 +4,11 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.2] — 2026-11-02
 
 ### 优化
 
 - 系统提示词改为英文并压至 400 字符内（现 368）：只保留跨工具策略，脱敏/通行密钥细节归入对应工具描述；不再随 maskMode 追加。
-
-## [0.14.2-rc.1] — 2026-11-02
-
-### 优化
-
 - 设置页 UI 对齐宿主样式：连接、登录、两步验证表单改为「左侧标签与说明、右侧控件」的设置行，行间使用 0.5px 分隔线；顶部操作区改为右对齐的「返回」「保存」胶囊徽章（无图标，保存仅两个字）。
 - 从密码列表打开「设置」时，页签栏与搜索/同步工具栏全部收起，连接表单成为独立子页；「插件权限」从橙色描边警示框改为中性信息卡，并显示当前档位小徽标。
 - 页头标题缩至宿主设置页的 16px，包名/版本/GitHub 元信息改为标题下方独立一行。
@@ -26,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 权限审批按宿主模式联动：DSH 处于 `workspace-write` / `read-only`（`approval: ask`）时，即使插件档为 `auto`，写操作与通行密钥导出也会弹出审批；插件 `readonly` 保持拒绝。
 - 密码读取、TOTP 读取、日志擦除（`bitwarden_sweep`）与通行密钥临时文件清理（`bitwarden_passkey_cleanup`）明确不进入审批门禁；后两者属于安全清理，强制执行。
 - 权限菜单的「完全权限」「每次确认」选项增加鼠标悬停提示（设置页权限卡按钮同），要求同时将 DSH 对话权限设为「完全权限」（完整授权）或「工作区内修改」，避免宿主在约 1 毫秒内自动拒绝 ask。
-- 修复官方 Bitwarden 云登录失败：`bitwarden-client-name` 改用官方 CLI 的 `cli`，空响应 429 不再误报为限流。
+- 修复官方 Bitwarden 云登录失败：`bitwarden-client-name` 改用官方 CLI 的 `cli`，空响应 429 不再误报为限流。（@zuojinxin 提出）
 
 ## [0.14.1] — 2026-11-02
 
