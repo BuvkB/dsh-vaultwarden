@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 通行密钥元数据增加 usableForLogin（discoverable），区分免用户名登录与需要 allowCredentials 的凭据。
 - 导出结果带 expiresAt，导出前自动清理超过 24 小时的旧导出文件。
 - 通行密钥导出写 passkeys/audit.jsonl 审计记录：时间、条目 id、rpId、权限档与来源，不含私钥；脱敏轨迹页底部展示最近 20 条。
-- 插件权限改为标题行右侧下拉菜单（只读 / 每次确认 / 完全权限），选择即生效；设置页权限卡保留。
+- 插件权限改为「密码列表 / 脱敏轨迹」页签行右侧的下拉菜单（只读 / 每次确认 / 完全权限），选择即生效；设置页权限卡保留。
 - 新增 docs/passkey-login.md：单 CDP 会话内的 WebAuthn 注入配方、Telegram 示例与常见错误处理。
 
 - 脱敏轨迹页的门禁看板可交互：会话/模型前三名的行变成可点按的开关，点按后下方流水收窄为该会话或该模型的脱敏记录——行数、页数、总数都按收窄后的列表计（筛选在服务端完成，`vw/trail` 新增 `sessionKey` / `modelKey` 参数，空模型串表示「未记录模型」一档），分页照常可用。回到全部有两条路：再点一次同一行，或点流水标题旁的蓝色短胶囊「按会话筛选 / 按模型筛选 ✕」（完整名字在 tooltip）；看板与头条的数字始终描述整个时间窗口，不随筛选移动。
