@@ -1419,7 +1419,7 @@ async function main() {
   })
   check('setup server field accepts the address', setupInputs()[0].props.value === 'https://vault.example.com')
   check('setup master password starts empty and is a password field', setupInputs()[2].props.type === 'password' && setupInputs()[2].props.value === '')
-  const setupSave = () => unconfigured.renderer.root.findAllByType('button').find((node) => node.props.children === '保存并连接')
+  const setupSave = () => unconfigured.renderer.root.findAllByType('button').find((node) => node.props['data-vw-settings-save'] !== undefined || node.props.children === '保存并连接')
   await act(async () => {
     setupInputs()[1].props.onChange({ target: { value: 'me@example.com' } })
   })
@@ -1454,6 +1454,24 @@ async function main() {
   await act(async () => {
     unconfigured.renderer.unmount()
   })
+
+  // ── the connection form is a settings page, not a table under the toolbar ──
+  // Opening 设置 from a working vault used to leave the tab strip and the
+  // search/sync toolbar above the form, which made the form read as another
+  // table below the list. The frame must stand down for the subpage, and the
+  // fields must use the host's label-left/control-right settings rows.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    const gear = panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+    check('the vault toolbar offers the connection form', Boolean(gear))
+    await act(async () => { gear.props.onClick() })
+    const tree = () => panel.renderer.root
+    check('the connection form renders as a settings page', tree().findAll((node) => node.props?.['data-vw-setup-page'] !== undefined).length === 1)
+    check('the connection form hides the vault tab strip', tree().findAll((node) => node.props?.['data-vw-tab'] !== undefined).length === 0)
+    check('the connection form hides the search and sync toolbar', tree().findAll((node) => node.props?.['data-vw-toolbar'] !== undefined).length === 0)
+    check('the connection form uses label/control settings rows', tree().findAll((node) => node.props?.['data-vw-setting-row'] !== undefined).length >= 4)
+    await act(async () => { panel.renderer.unmount() })
+  }
 
   // ── API key method in the UI ──────────────────────────────────────────────
   // The API key lives on the same form as the password, behind a method select:
@@ -2250,7 +2268,7 @@ async function main() {
     const notConfiguredError = { ok: false, error: { code: 'not_configured', message: '密码库尚未配置完整' } }
     const setupRpc = makeRpc({ boot: () => bootWith(apiConfig.value, false), list: () => notConfiguredError, status: () => notConfiguredError })
     const setup = await mountPanel(mod, {}, setupRpc)
-    const setupCard = setup.renderer.root.findAll((node) => node.props?.style?.minHeight === 200)[0]
+    const setupCard = setup.renderer.root.findAll((node) => node.props?.['data-vw-setup-page'] !== undefined)[0]
     check(
       'the setup card cannot be squeezed below its content',
       Boolean(setupCard) && setupCard.props.style.flex === 'none',
@@ -2258,7 +2276,7 @@ async function main() {
     )
     check(
       'the setup card still caps its width for a wide host',
-      setupCard?.props.style.maxWidth === 520,
+      setupCard?.props.style.maxWidth === 640,
       String(setupCard?.props.style.maxWidth),
     )
     await act(async () => { setup.renderer.unmount() })
@@ -2599,6 +2617,9 @@ async function main() {
     await act(async () => { await sleep(50) })
     check('edit asks the host for the whole record', drafts.length === 1 && drafts[0].id === 'item-1', JSON.stringify(drafts))
     check('the editor replaces the detail, not a section of it', Boolean(editorNode()) && nodeWith('data-vw-detail').length === 1)
+    const editorHead = () => panel.renderer.root.findAll((n) => n.props?.['data-vw-editor-head'] !== undefined)[0]
+    check('the editor puts save and cancel in its top bar', Boolean(editorHead()) && editorHead().findAllByType('button').length >= 2, String(editorHead()?.findAllByType('button').length))
+    check('the editor hides the separate back-to-list row', nodeWith('data-vw-back-row').length === 0)
     check('the editor fills the form from the draft', editorInput('名称').props.value === 'GitHub 工作账号' && editorInput('用户名').props.value === 'octocat@example.com', String(editorInput('用户名')?.props.value))
     check('the password field is a password field', editorInput('密码').props.type === 'password' && editorInput('密码').props.value === 'gh-p@ssw0rd-42')
     // A single-line input: a URL is one line, and a 66px textarea under a
@@ -3393,7 +3414,12 @@ async function main() {
     check('the permission menu starts at the host tier', menuText().includes('完全权限'), menuText())
     await act(async () => { menu().props.onClick() })
     await flush()
+    const autoOption = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'auto')[0]
     const askOption = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'ask')[0]
+    const autoTitle = String(autoOption?.props?.title ?? '')
+    const askTitle = String(askOption?.props?.title ?? '')
+    check('full access tooltip explains the required DSH preset', autoTitle.includes('完全权限') && autoTitle.includes('工作区内修改'), autoTitle)
+    check('ask-every-time tooltip explains the required DSH preset', askTitle.includes('工作区内修改'), askTitle)
     await act(async () => { askOption.props.onClick() })
     await flush()
     check('choosing 每次确认 updates the menu', menuText().includes('每次确认'), menuText())
