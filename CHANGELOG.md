@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 修复
 
-- 修复新版 DSH 设置导航中「密码库」图标重复（主机齿轮与插件盾牌同时显示）的问题。
+- 适配 DSH 0.2.2-alpha.3 的设置导航图标插槽，修复「密码库」图标重复（主机齿轮与插件盾牌同时显示）的问题。
 
 ## [0.15.0] — 2026-11-03
 
