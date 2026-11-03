@@ -42,7 +42,8 @@ dsh plugin --profile web add dsh-vaultwarden@latest
 | `masterPassword` | 主密码；只写，不落浏览器 |
 | `apiKeyClientId` / `apiKeyClientSecret` | 可选，API 密钥登录（可绕过两步验证） |
 | `accessMode` | `readonly` / `ask` / `auto`，控制模型工具的写回权限 |
-| `maskMode` / `sweepMode` | 占位符脱敏与日志擦除开关 |
+| `maskEnabled` | 插件脱敏总开关（默认开启）。关闭后不再返回占位符、不显示脱敏轨迹页，凭据会以明文进入会话日志；仅在已使用其它本地脱敏服务时关闭 |
+| `sweepMode` | 日志擦除开关（受 `maskEnabled` 约束） |
 
 DSH 会话权限为 `workspace-write` / `read-only`（`approval: ask`）时，即使插件 `accessMode` 为 `auto`，写操作与通行密钥导出也会走审批；密码/TOTP 读取、日志擦除与通行密钥临时文件清理不需要审批，后两者属于强制执行的安全清理。
 
@@ -58,6 +59,7 @@ DSH 会话权限为 `workspace-write` / `read-only`（`approval: ask`）时，�
 
 ## 脱敏说明
 
+- 插件脱敏默认开启；如果你已经使用其它本地脱敏服务，可在 设置 → 插件 → dsh-vaultwarden 关闭它，关闭后「脱敏轨迹」页不再显示，密码等字段会以明文进入模型上下文和会话日志，存在泄露风险。
 - 占位符形如 `{{BW_PASSWORD_xxxxxxxx}}`，由 HMAC 生成，不可逆；只能引用、比较或按字段取回。
 - 脱敏看板与流水详情见 [docs/ui-design.md](docs/ui-design.md)。
 - 擦除标记 `[REDACTED:BW]` 表示明文曾经落盘、随后被擦除；它没有可反查的盐。

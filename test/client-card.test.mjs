@@ -191,7 +191,7 @@ const DRAFTS = {
 
 
 /** The hosted configuration the panel opens with. */
-const CONFIG_VALUE = { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly' }
+const CONFIG_VALUE = { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true, hasApiKey: false, websocket: true, pollIntervalSeconds: 60, cacheMinutes: 30, accessMode: 'readonly', maskEnabled: true, maskMode: true }
 /** `boot`'s view of a live session. */
 const AUTHED_SESSION = { configured: true, authenticated: true, pendingTwoFactor: false, unlocked: true }
 /** `boot`'s view of a session the host could not revive. */
@@ -326,6 +326,10 @@ function makeRpc(overrides = {}) {
       if (method === 'totp') return { ok: true, value: { id: 'item-1', name: 'GitHub 工作账号', totp: { code: '123456', digits: 6, period: 30, secondsRemaining: 20, remaining: 20, algorithm: 'SHA1' } } }
       if (method === 'config') return { ok: true, value: CONFIG_VALUE }
       if (method === 'setAccessMode') return { ok: true, value: { ...CONFIG_VALUE, accessMode: payload?.args?.mode ?? 'readonly' } }
+      if (method === 'setMaskEnabled') {
+        const enabled = payload?.args?.enabled !== false
+        return { ok: true, value: { ...CONFIG_VALUE, maskEnabled: enabled, maskMode: enabled } }
+      }
       if (method === 'configure') return { ok: true, value: { serverUrl: 'https://vault.example.com', email: 'me@example.com', hasMasterPassword: true } }
       if (method === 'twoFactor') return { ok: true, value: { pending: true, providers: [0], provider: 0 } }
       // Default: a stored session, so the panel renders the vault. The host
@@ -387,7 +391,8 @@ async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
       },
       bind: () => (key) => dictionaries.zh?.[key] ?? key,
     },
-    get: (name) => (name === 'connection' && rpcOrUndefined ? { rpc: rpcOrUndefined } : undefined),
+    configForms: options.configForms,
+    get: (name) => (name === 'connection' && rpcOrUndefined ? { rpc: rpcOrUndefined } : name === 'configForms' ? options.configForms : undefined),
     slots: {
       inject: (name, callback) => callback(),
       register: (options, render) => {
@@ -4146,6 +4151,80 @@ async function main() {
     await press('Home')
     await flush(80)
     check('Home jumps to the first tab', tabs()[0].props['aria-selected'] === true)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── plugin masking off: the trail page is not part of the UI ─────────────
+  // The switch exists for deployments that already run another local masking
+  // service. When it is off the plugin offers no masking surface, so the
+  // second tab disappears entirely instead of opening an empty ledger.
+  {
+    const maskOff = { ...CONFIG_VALUE, maskEnabled: false, maskMode: false }
+    const maskRpc = makeRpc({ boot: () => bootWith(maskOff, true, AUTHED_SESSION) })
+    const panel = await mountPanel(mod, {}, maskRpc)
+    await flush()
+    const tabs = () => panel.renderer.root.findAll((node) => node.props?.role === 'tab')
+    const bodyText = () => JSON.stringify(panel.renderer.toJSON())
+    check('masking off keeps exactly one tab', tabs().length === 1, String(tabs().length))
+    check('masking off keeps the password list tab visible', tabs()[0]?.props.children?.includes('密码列表') === true && tabs()[0]?.props['aria-selected'] === true, JSON.stringify(tabs().map((node) => node.props.children)))
+    check('masking off does not mention the trail tab', !bodyText().includes('脱敏轨迹'))
+    check('masking off never reads the trail', maskRpc.calls.every((call) => call.method !== 'trail'), JSON.stringify(maskRpc.calls.map((call) => call.method)))
+    check('masking off keeps the password search available', bodyText().includes('data-vw-search'))
+    check('masking off keeps the tab strip itself', panel.renderer.root.findAll((node) => node.props?.['data-vw-tabs'] !== undefined).length === 1)
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the masking card in the plugin settings page ─────────────────────────
+  // Turning masking off is the dangerous direction: the card must ask first,
+  // and the RPC carries confirm=true only after that dialog is accepted.
+  {
+    const maskRpc = makeRpc()
+    const panel = await mountPanel(mod, {}, maskRpc)
+    const gear = panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+    await act(async () => { gear.props.onClick() })
+    const tree = () => panel.renderer.root
+    const text = () => JSON.stringify(panel.renderer.toJSON())
+    check('the settings page carries the plugin masking card', text().includes('插件脱敏') && text().includes('关闭插件脱敏'))
+    check('the masking card starts on', text().includes('已开启'))
+    const toggle = () => tree().findAll((node) => node.props?.['data-vw-mask-toggle'] !== undefined)[0]
+    await act(async () => { toggle().props.onClick() })
+    check('turning masking off asks for confirmation', text().includes('确认关闭插件脱敏？'), text().includes('存在泄露风险') ? 'dialog title missing' : 'warning body missing')
+    check('the confirmation is not the write yet', panel.renderer.root.findAll((node) => node.props?.['data-vw-mask-confirm'] !== undefined).length === 1)
+    const confirm = () => tree().findAll((node) => node.props?.['data-vw-mask-confirm'] !== undefined)[0]
+    await act(async () => { confirm().props.onClick() })
+    await act(async () => { await sleep(40) })
+    const sent = maskRpc.calls.find((call) => call.method === 'setMaskEnabled')
+    check('confirming sends setMaskEnabled(enabled=false, confirm=true)', sent?.args?.enabled === false && sent?.args?.confirm === true, JSON.stringify(sent?.args))
+    check('the card reports the switch off', text().includes('已关闭') && text().includes('明文进入模型上下文'))
+    check('a closed switch wears the danger tone', tree().findAll((node) => node.props?.['data-vw-masking-tone'] !== undefined)[0]?.props['data-vw-masking-tone'] === 'danger')
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── legacy host: the config form is the fallback write path ──────────────
+  // A host loaded before `setMaskEnabled` existed answers the RPC with HTTP
+  // 404. The old Config schema still has maskMode, and the settings service
+  // can write it; the card must use that instead of failing the save.
+  {
+    const writes = []
+    const form = {
+      getSnapshot: () => ({ status: 'ready', value: { maskMode: true } }),
+      set: async (field, value) => {
+        writes.push({ field, value })
+        return field === 'maskMode'
+      },
+    }
+    const maskRpc = makeRpc({ setMaskEnabled: () => { throw new Error('transport failure for /api/vw/setMaskEnabled: HTTP 404') } })
+    const panel = await mountPanel(mod, {}, maskRpc, { configForms: { get: () => form } })
+    const gear = panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+    await act(async () => { gear.props.onClick() })
+    const toggle = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-mask-toggle'] !== undefined)[0]
+    await act(async () => { toggle().props.onClick() })
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.['data-vw-mask-confirm'] !== undefined)[0].props.onClick() })
+    await act(async () => { await sleep(40) })
+    const text = () => JSON.stringify(panel.renderer.toJSON())
+    check('a legacy host writes maskMode through the config form', writes[0]?.field === 'maskMode' && writes[0]?.value === false, JSON.stringify(writes))
+    check('the legacy fallback does not call the missing RPC', maskRpc.calls.every((call) => call.method !== 'setMaskEnabled'))
+    check('the legacy fallback saves without the 404 error', text().includes('脱敏设置已保存') && !text().includes('保存失败'))
     await act(async () => { panel.renderer.unmount() })
   }
 

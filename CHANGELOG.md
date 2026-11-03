@@ -4,6 +4,14 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 功能
+
+- 插件脱敏改为**默认开启**，并新增「插件脱敏」总开关（`maskEnabled`，兼容旧 `maskMode`）：关闭后不再返回占位符、停止日志擦除定时任务，「脱敏轨迹」页签也从插件 UI 中隐藏，避免与其它本地脱敏服务重复处理。
+- 关闭插件脱敏是危险方向：设置页的「插件脱敏」卡片会二次确认，并明确提示密码、TOTP、卡号等将以明文进入会话记录和本地日志，存在泄露风险。
+- 兼容尚未加载 `vw/setMaskEnabled` 的旧版宿主：面板会自动回退到宿主的配置表单写 `maskMode`，不再出现 HTTP 404 保存失败。
+
 ## [0.15.0] — 2026-11-03
 
 ### 优化

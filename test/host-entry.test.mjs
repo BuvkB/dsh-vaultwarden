@@ -132,10 +132,15 @@ async function main() {
     const report = plugins[0]?.config?.owner?.getSettings?.()
     return report?.serverUrl === 'https://vault.example.com' && report?.email === 'me@example.com' && report?.accessMode === 'readonly'
   })(), JSON.stringify(plugins[0]?.config?.owner?.getSettings?.()))
+  check('plugin masking is on by default', (() => {
+    const report = plugins[0]?.config?.owner?.getSettings?.()
+    return report?.maskEnabled === true && report?.maskMode === true
+  })(), JSON.stringify({ maskEnabled: plugins[0]?.config?.owner?.getSettings?.()?.maskEnabled, maskMode: plugins[0]?.config?.owner?.getSettings?.()?.maskMode }))
+  check('the host form exposes a volatile maskEnabled switch', Config?.dict?.maskEnabled?.meta?.volatile === true && Config?.dict?.maskEnabled?.meta?.default === true)
   check('every Config field is volatile (host form renders them)', (() => {
     const schema = Config
     const fields = schema?.dict ?? {}
-    return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode'].every((key) => fields[key]?.meta?.volatile === true)
+    return ['serverUrl', 'email', 'masterPassword', 'apiKeyClientId', 'apiKeyClientSecret', 'cacheMinutes', 'websocket', 'pollIntervalSeconds', 'deviceIdentifier', 'accessMode', 'maskEnabled'].every((key) => fields[key]?.meta?.volatile === true)
   })())
   const promptSection = sections.find((section) => section.name === 'bitwarden-vault')
   check('prompt guidance is English and within the 400-char host limit', Boolean(promptSection) && /Bitwarden/.test(promptSection.text) && !/[\u4e00-\u9fff]/.test(promptSection.text) && promptSection.text.length <= 400, `${promptSection?.text.length ?? 'missing'} chars`)

@@ -49,6 +49,14 @@ function makeGateway(serverUrl, stored) {
       // rebuilding the client, which is what makes a needless write fatal.
       client = new VaultClient({ serverUrl, ...settings })
     },
+    // The panel masking card's dedicated RPC, wired exactly like lib/index.js:
+    // one named field, no session restart.
+    setMaskEnabled: async (enabled) => {
+      writes.push({ maskEnabled: Boolean(enabled) })
+      settings.maskEnabled = Boolean(enabled)
+      settings.maskMode = Boolean(enabled)
+      client = new VaultClient({ serverUrl, ...settings })
+    },
   }
   // `TypertRemoteService`'s constructor needs a live Cordis context, so build
   // the instance from the prototype and wire the fields it uses — exactly what
@@ -565,6 +573,24 @@ async function main() {
 
     await editorServer.close()
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+
+  // ── plugin masking switch ────────────────────────────────────────────────
+  // OFF is the dangerous direction and needs the panel's confirmation token;
+  // ON is safe and immediate. Both go through the named RPC, never configure().
+  {
+    const { gateway, writes } = makeGateway('https://vault.example.com', {})
+    let refused = null
+    try {
+      await gateway.setMaskEnabled(false)
+    } catch (error) {
+      refused = error
+    }
+    check('turning plugin masking off needs confirmation', /确认/.test(String(refused?.message)) && writes.length === 0, String(refused?.message))
+    const off = await gateway.setMaskEnabled(false, true)
+    check('confirmed off persists maskEnabled=false', writes.some((patch) => patch.maskEnabled === false) && off.maskEnabled === false && off.maskMode === false, JSON.stringify({ writes, config: off }))
+    const on = await gateway.setMaskEnabled(true)
+    check('turning plugin masking on needs no confirmation', on.maskEnabled === true && on.maskMode === true, JSON.stringify(on))
   }
 
   await server.close()

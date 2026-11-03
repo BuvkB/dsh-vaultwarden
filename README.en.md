@@ -42,7 +42,8 @@ Open **Settings → Plugins → dsh-vaultwarden**:
 | `masterPassword` | Master password; write-only |
 | `apiKeyClientId` / `apiKeyClientSecret` | Optional API-key login (bypasses two-factor prompts) |
 | `accessMode` | `readonly` / `ask` / `auto` for model-driven writes |
-| `maskMode` / `sweepMode` | Placeholder masking and log-scrubbing switches |
+| `maskEnabled` | Plugin masking master switch (on by default). Off returns plaintext, hides the masking trail page and stops log scrubbing; turn it off only when another local masking service already covers this path |
+| `sweepMode` | Log-scrubbing switch (subject to `maskEnabled`) |
 
 When the DSH session is `workspace-write` / `read-only` (`approval: ask`), writes and passkey exports still require host approval even if the plugin is set to `auto`. Password/TOTP reads, log scrubbing and passkey temporary-file cleanup do not require approval; the latter two are forced security cleanups.
 
@@ -58,6 +59,7 @@ Passkeys: `bitwarden_passkey_list` · `bitwarden_passkey_export` · `bitwarden_p
 
 ## Masking notes
 
+- Plugin masking is on by default. If another local masking service already covers this path, turn it off under Settings → Plugins → dsh-vaultwarden. With it off the Masking trail page disappears and passwords etc. can reach the model context and session logs as plaintext — this is insecure.
 - Placeholders look like `{{BW_PASSWORD_xxxxxxxx}}`; they are HMAC-derived, irreversible and can be referenced, compared or fetched per field.
 - The dashboard and ledger details live in [docs/ui-design.md](docs/ui-design.md).
 - `[REDACTED:BW]` means plaintext was written to disk and later scrubbed; it has no salt for reverse lookup.
