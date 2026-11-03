@@ -13,7 +13,9 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
+# No workflow_dispatch: every step reads GITHUB_REF_NAME as the version, and a
+# manual run on a branch would hand it "main" and fail the version check. A
+# failed run is re-run from its own run (gh run rerun), which keeps the tag.
 
 # contents: write is for the release page and its assets; id-token: write is
 # npm Trusted Publishing's OIDC exchange (no token, no 2FA prompt).
