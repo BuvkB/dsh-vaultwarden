@@ -1444,6 +1444,11 @@ async function main() {
   // RPC, never through the generic `configure` writer.
   const setupButtons = () => unconfigured.renderer.root.findAllByType('button')
   check('setup shows the plugin permission card', setupText.includes('插件权限') && setupText.includes('授予完全权限'))
+  // The card is a risk ladder, not one neutral box: the tier decides its
+  // accent, so a glance tells the reader whether the model can write.
+  const permissionToneOf = (panel) =>
+    panel.renderer.root.findAll((node) => node.props && node.props['data-vw-permission-tone'] !== undefined)[0]?.props['data-vw-permission-tone']
+  check('a read-only card wears the safe tone', permissionToneOf(unconfigured) === 'ok', String(permissionToneOf(unconfigured)))
   await act(async () => { setupButtons().find((node) => node.props.children === '授予完全权限').props.onClick() })
   check('granting full access asks for confirmation', JSON.stringify(unconfigured.renderer.toJSON()).includes('确认授予完全权限？'))
   await act(async () => { setupButtons().find((node) => node.props.children === '确认开启').props.onClick() })
@@ -1451,6 +1456,7 @@ async function main() {
   const permissionCall = setupRpc.calls.find((call) => call.method === 'setAccessMode')
   check('confirming sends setAccessMode(auto, confirm=true)', permissionCall?.args?.mode === 'auto' && permissionCall?.args?.confirm === true, JSON.stringify(permissionCall?.args))
   check('the card reports the new tier', JSON.stringify(unconfigured.renderer.toJSON()).includes('完全权限'))
+  check('a full-access card wears the caution tone', permissionToneOf(unconfigured) === 'danger', String(permissionToneOf(unconfigured)))
   await act(async () => {
     unconfigured.renderer.unmount()
   })
