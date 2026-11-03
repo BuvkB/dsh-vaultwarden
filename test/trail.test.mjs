@@ -392,14 +392,14 @@ const main = async () => {
   await writeLog('ws', 'session-flood', 4, [titleLine(NOW - 100, '会话己'), ...flood], NOW - 500)
   resetTrailIndex()
   const floodReport = await trailReport({ sessionsRoot: slowRoot, path: join(root, 'flood-index.json'), now: () => NOW, days: 7, budgetMs: 90000 })
-  check('the ledger is capped', floodReport.rows.length <= 40, String(floodReport.rows.length))
+  check('the ledger is capped', floodReport.rows.length <= 20, String(floodReport.rows.length))
   check('the ledger cap does not cap the headline', floodReport.total >= 60, String(floodReport.total))
   check('a rail is capped', floodReport.models.length <= 6, String(floodReport.models.length))
 
   // ── pages ─────────────────────────────────────────────────────────────────
-  // Forty rows is more than one screen, so the ledger is paged — and the rows
+  // Twenty rows is about one screen, so the ledger is paged — and the rows
   // after the first page are the whole point. Each burst here is its own
-  // conversation, an hour apart, so nothing folds: 60 bursts, 40 to a page.
+  // conversation, an hour apart, so nothing folds: 60 bursts, 20 to a page.
   const paged = { version: 2, files: {}, meta: {} }
   const burstRows = []
   for (let index = 0; index < 60; index += 1) {
@@ -416,19 +416,21 @@ const main = async () => {
     }
   }
   const pageOne = aggregateTrail(paged, { days: 7, now: NOW })
-  check('the ledger says how many pages it has', pageOne.ledger.pages === 2, JSON.stringify(pageOne.ledger))
+  check('the ledger says how many pages it has', pageOne.ledger.pages === 3, JSON.stringify(pageOne.ledger))
   check('the first page is page one', pageOne.ledger.page === 1, JSON.stringify(pageOne.ledger))
-  check('a full page is as long as a page', pageOne.rows.length === 40, String(pageOne.rows.length))
+  check('a full page is as long as a page', pageOne.rows.length === 20, String(pageOne.rows.length))
   check('the ledger knows its whole length, not the page length', pageOne.ledger.total === 60, String(pageOne.ledger.total))
   const pageTwo = aggregateTrail(paged, { days: 7, now: NOW, page: 2 })
-  check('the second page holds the rest', pageTwo.rows.length === 20, String(pageTwo.rows.length))
+  check('the second page is as full as the first', pageTwo.rows.length === 20, String(pageTwo.rows.length))
   check('the second page is not the first one', JSON.stringify(pageTwo.rows.map((row) => row.name)) !== JSON.stringify(pageOne.rows.map((row) => row.name)), JSON.stringify(pageTwo.rows.map((row) => row.name).slice(0, 3)))
   check('paging does not change the headline', pageTwo.total === pageOne.total && pageTwo.ledger.total === pageOne.ledger.total, JSON.stringify([pageOne.total, pageTwo.total]))
-  check('the pages do not overlap and do not leave a gap', new Set([...pageOne.rows, ...pageTwo.rows].map((row) => row.time)).size === 60, String(new Set([...pageOne.rows, ...pageTwo.rows].map((row) => row.time)).size))
+  const pageThree = aggregateTrail(paged, { days: 7, now: NOW, page: 3 })
+  check('the last page holds the remainder', pageThree.rows.length === 20, String(pageThree.rows.length))
+  check('the pages do not overlap and do not leave a gap', new Set([...pageOne.rows, ...pageTwo.rows, ...pageThree.rows].map((row) => row.time)).size === 60, String(new Set([...pageOne.rows, ...pageTwo.rows, ...pageThree.rows].map((row) => row.time)).size))
   // The page is clamped on the host because the client cannot know the page
   // count: the window shrinks under a reader as old sessions slide out.
   const past = aggregateTrail(paged, { days: 7, now: NOW, page: 99 })
-  check('a page past the end lands on the last one', past.ledger.page === 2 && past.rows.length === 20, JSON.stringify(past.ledger))
+  check('a page past the end lands on the last one', past.ledger.page === 3 && past.rows.length === 20, JSON.stringify(past.ledger))
   const before = aggregateTrail(paged, { days: 7, now: NOW, page: 0 })
   check('a page before the start lands on the first one', before.ledger.page === 1, JSON.stringify(before.ledger))
   const nonsense = aggregateTrail(paged, { days: 7, now: NOW, page: 'yesterday' })
