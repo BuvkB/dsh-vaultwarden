@@ -1,3 +1,12 @@
+# Release pipeline. A tag is the whole trigger: everything a release needs —
+# the npm package the marketplace reads, the tarball the marketplace downloads,
+# and the GitHub release page — is produced here, on a clean checkout, so a
+# published artifact can never depend on what happened to sit in someone's
+# working tree.
+#
+# The old flow packed the tarball on the maintainer's machine and uploaded it by
+# hand. That made the artifact's bytes a property of one laptop, and the two
+# asset names (versioned + stable) were two chances to upload the wrong file.
 name: publish
 
 on:
@@ -6,8 +15,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# contents: write is for the release page and its assets; id-token: write is
+# npm Trusted Publishing's OIDC exchange (no token, no 2FA prompt).
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -15,23 +26,96 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org/
+
       - name: npm >= 11.5.1 for trusted publishing
         run: npm install -g npm@latest
+
       - name: Install optional runtime dependency
         run: npm install --omit=dev --no-audit --no-fund
+
       - name: Syntax check
         run: for f in lib/*.js; do node --check "$f"; done
-      - name: Publish (OIDC, tokenless)
+
+      - name: Version agreement
+        # The tag, the manifest and the bundle's stamped literal must name the
+        # same release. A stray tag is cheap to delete now and expensive later.
         run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          stamp="$(node -p "require('fs').readFileSync('lib/client.js','utf8').match(/const BUILD_VERSION = '([^']*)'/)[1]")"
+          echo "tag=${tag_version} package=${pkg_version} stamp=${stamp}"
+          [ "${tag_version}" = "${pkg_version}" ] || { echo "tag and package.json disagree" >&2; exit 1; }
+          [ "${stamp}" = "${pkg_version}" ] || { echo "lib/client.js is stamped ${stamp}, expected ${pkg_version}" >&2; exit 1; }
+
+      - name: Publish (OIDC, tokenless)
+        # Idempotent: re-running a workflow whose publish already landed must
+        # continue to the release step instead of dying on "version exists".
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="${GITHUB_REPOSITORY#*/}"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${version} is already on npm — skipping publish."
+            exit 0
+          fi
           if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
-            # A release candidate must never become npm's `latest`; the
+            # A release candidate must never become npm's latest; the
             # marketplace reads dist-tags.latest to decide whether to offer an
             # update, so publishing an rc as latest would push it to everyone.
             npm publish --tag rc
           else
             npm publish
+          fi
+
+      - name: Pack the tarball
+        # Both asset names come from ONE pack: the versioned copy is for humans
+        # and archives, the stable name is what the marketplace's
+        # releases/latest/download URL points at. Identical bytes by
+        # construction, not by remembering to upload the same file twice.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          file="$(npm pack --silent | tail -n1)"
+          cp "${file}" "dsh-vaultwarden-${version}.tgz"
+          cp "${file}" "dsh-vaultwarden.tgz"
+          sha256sum dsh-vaultwarden-*.tgz
+
+      - name: Extract this version's changelog section
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="${version}" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && substr($0, 1, 4) == "## [" { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no section for ${version}" >&2
+            exit 1
+          fi
+          echo "--- release notes ---"
+          cat release-notes.md
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          assets=("dsh-vaultwarden-${version}.tgz" "dsh-vaultwarden.tgz")
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            # A re-run of a workflow whose release exists: refresh the assets,
+            # keep the page (and the tag it points at) untouched.
+            gh release upload "${tag}" "${assets[@]}" --clobber
+          else
+            prerelease=()
+            if [[ "${tag}" == *-rc.* ]]; then prerelease=(--prerelease); fi
+            gh release create "${tag}" --title "${tag}" --notes-file release-notes.md "${prerelease[@]}" "${assets[@]}"
           fi

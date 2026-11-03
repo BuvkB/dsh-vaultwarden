@@ -57,7 +57,8 @@
   ],
   "scripts": {
     "build": "bash scripts/build.sh",
-    "test": "node test/mock-e2e.test.mjs"
+    "test": "node test/mock-e2e.test.mjs",
+    "preflight": "node scripts/preflight-release.mjs"
   },
   "devDependencies": {
     "react": "18.3.1",
