@@ -414,7 +414,7 @@ async function mountPanel(mod, dictionaries, rpcOrUndefined, options = {}) {
   await act(async () => {
     await sleep(50)
   })
-  return { renderer, registration, t: (key) => dictionaries.zh[key] ?? key }
+  return { renderer, registration, registrations, t: (key) => dictionaries.zh[key] ?? key }
 }
 
 /** A 130-entry vault: large enough that paging must kick in twice. */
@@ -459,8 +459,9 @@ async function main() {
   // ── happy path ────────────────────────────────────────────────────────────
   const dictionaries = {}
   const rpc = makeRpc()
-  const { renderer, registration, t } = await mountPanel(mod, dictionaries, rpc)
+  const { renderer, registration, registrations, t } = await mountPanel(mod, dictionaries, rpc)
   check('registers the entry panel as a settings page', Boolean(registration) && registration.options.id === 'vaultwarden', JSON.stringify(registration?.options))
+  check('registers the vault glyph in the new settings icon slot', registrations.some((entry) => entry.options.name === 'settings.section.icon' && entry.options.id === 'vaultwarden'), JSON.stringify(registrations.map((entry) => entry.options.name)))
   {
     // The host's settings nav hands every plugin section the generic gear and
     // offers no icon slot, so the label itself carries the glyph: VaultNavLabel
