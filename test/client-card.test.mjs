@@ -3416,8 +3416,14 @@ async function main() {
     const panel = await mountPanel(mod, {}, modeRpc)
     await flush()
     const menu = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu'] !== undefined)[0]
-    const menuText = () => String(menu()?.findAllByType('span')?.[0]?.props?.children ?? '')
+    // Read the tier label by its own hook, not by being the first span: the
+    // chip now leads with a state dot, and a label test must not depend on
+    // decoration order.
+    const menuText = () =>
+      String(menu()?.findAll((node) => node.props && node.props['data-vw-permission-current'] !== undefined)[0]?.props?.children ?? '')
+    const menuDot = () => menu()?.findAll((node) => node.props && node.props['data-vw-permission-dot'] !== undefined)[0]?.props['data-vw-permission-dot']
     check('the permission menu starts at the host tier', menuText().includes('完全权限'), menuText())
+    check('the header chip wears the tier colour', menuDot() === 'auto', String(menuDot()))
     await act(async () => { menu().props.onClick() })
     await flush()
     const autoOption = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'auto')[0]
@@ -3429,6 +3435,7 @@ async function main() {
     await act(async () => { askOption.props.onClick() })
     await flush()
     check('choosing 每次确认 updates the menu', menuText().includes('每次确认'), menuText())
+    check('the header chip repaints to the new tier colour', menuDot() === 'ask', String(menuDot()))
     // A section switch runs the same load() path a reopen/refresh takes. The
     // cached config must already carry the new tier or the old one repaints.
     const favRow = panel.renderer.root.findAll((node) => node.props?.['data-vw-section'] === 'favorites')[0]
