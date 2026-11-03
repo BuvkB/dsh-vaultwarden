@@ -13,9 +13,22 @@ on:
   push:
     tags:
       - 'v*'
-# No workflow_dispatch: every step reads GITHUB_REF_NAME as the version, and a
-# manual run on a branch would hand it "main" and fail the version check. A
-# failed run is re-run from its own run (gh run rerun), which keeps the tag.
+  # Re-running a failed release: a push-tag run can be re-run from its own run
+  # (gh run rerun) and that keeps the tag, but a run that failed *before* any
+  # step could be fixed only by a fresh dispatch. This entry point exists for
+  # exactly that: dispatch from main, name the tag, and the job checks that tag
+  # out. The tag input is required — a dispatch without one has no version to
+  # agree on, and guessing from a branch name is how releases get mislabelled.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to (re)publish, e.g. v0.15.0'
+        required: true
+        type: string
+
+# The tag every step works on: the pushed tag, or the one a dispatch names.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 # contents: write is for the release page and its assets; id-token: write is
 # npm Trusted Publishing's OIDC exchange (no token, no 2FA prompt).
@@ -28,6 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A dispatch from main still has to build the commit the tag names.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -48,7 +64,7 @@ jobs:
         # same release. A stray tag is cheap to delete now and expensive later.
         run: |
           set -euo pipefail
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${RELEASE_TAG#v}"
           pkg_version="$(node -p "require('./package.json').version")"
           stamp="$(node -p "require('fs').readFileSync('lib/client.js','utf8').match(/const BUILD_VERSION = '([^']*)'/)[1]")"
           echo "tag=${tag_version} package=${pkg_version} stamp=${stamp}"
@@ -60,13 +76,13 @@ jobs:
         # continue to the release step instead of dying on "version exists".
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           name="${GITHUB_REPOSITORY#*/}"
           if npm view "${name}@${version}" version >/dev/null 2>&1; then
             echo "${version} is already on npm — skipping publish."
             exit 0
           fi
-          if [[ "${GITHUB_REF_NAME}" == *-rc.* ]]; then
+          if [[ "${RELEASE_TAG}" == *-rc.* ]]; then
             # A release candidate must never become npm's latest; the
             # marketplace reads dist-tags.latest to decide whether to offer an
             # update, so publishing an rc as latest would push it to everyone.
@@ -82,16 +98,21 @@ jobs:
         # construction, not by remembering to upload the same file twice.
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
+          # npm names the tarball after the package, which is already the name
+          # the versioned asset wants; only a differently-named output needs a
+          # move. Copying a file onto itself is what broke the first run.
           file="$(npm pack --silent | tail -n1)"
-          cp "${file}" "dsh-vaultwarden-${version}.tgz"
-          cp "${file}" "dsh-vaultwarden.tgz"
-          sha256sum dsh-vaultwarden-*.tgz
+          if [ "${file}" != "dsh-vaultwarden-${version}.tgz" ]; then
+            mv "${file}" "dsh-vaultwarden-${version}.tgz"
+          fi
+          cp "dsh-vaultwarden-${version}.tgz" "dsh-vaultwarden.tgz"
+          sha256sum "dsh-vaultwarden-${version}.tgz" "dsh-vaultwarden.tgz"
 
       - name: Extract this version's changelog section
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           awk -v v="${version}" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && substr($0, 1, 4) == "## [" { exit }
@@ -109,7 +130,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           version="${tag#v}"
           assets=("dsh-vaultwarden-${version}.tgz" "dsh-vaultwarden.tgz")
           if gh release view "${tag}" >/dev/null 2>&1; then
