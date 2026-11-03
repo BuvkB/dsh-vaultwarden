@@ -4,6 +4,21 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-11-03
+
+### 优化
+
+- 脱敏轨迹与密码列表互切时保留各自的分页、筛选与滚动位置；切回轨迹页重放柱状图生长动画。
+- 脱敏流水每页条数由 40 条改为 20 条。
+- 通行密钥记录文案由「导出」改为「调用」，权限说明同步调整。
+- 插件权限卡按档位配色：只读绿、每次确认琥珀、完全权限红。
+
+### 修复
+
+- 脱敏轨迹切换 7/30 天与翻页时整页跳闪。
+- 柱状图收窄后日期轴与柱子错位。
+- 从 30 天切回 7 天时柱状图不重放生长动画。
+- 插件市场安装或更新插件期间修改插件设置报写入锁超时。
 ## [0.14.2] — 2026-11-02
 
 ### 优化
