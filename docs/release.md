@@ -61,11 +61,20 @@ git push origin v0.15.0
 
 两者由同一次 `npm pack` 复制而来，字节完全一致，不需要手动上传两次。
 
-## 三道复验（发布后，本地）
+## 复验（发布后，本地，不解压不下载）
 
-1. 从 `https://github.com/BuvkB/dsh-vaultwarden/releases/latest/download/dsh-vaultwarden.tgz` 下载，核对 sha256 与本地 `npm pack` 结果一致，同时核对 GitHub 记录的 digest。
-2. 解包，检查修复标记齐全（按当版改动的关键字查）、`package/package.json` 版本号正确、`node --check` 全部 lib 文件通过。
-3. 对比发布产物与源码：`lib/client.js`、`CHANGELOG.md` 应逐字节一致。
+```sh
+npm run verify-release              # 校验 package.json 里的版本
+npm run verify-release -- v0.15.0   # 或点名某个 tag
+```
+
+它只读哈希：
+
+1. Release 已发布（不是 draft），两个资产都在、都不为空；
+2. 两个资产的 digest 相同——市场下载稳定名、人下载版本化名，两者不同就等于发了两个不同的包；
+3. npm 上有这个版本，且 `dist-tags.latest` 指向它（市场更新提示靠这条）。
+
+**为什么不下载解包**：digest 本身就是内容哈希，下载只能再证明一次「传输没坏」，证明不了「文件对不对」。而「本地打包 vs 云端打包」的字节对比也不成立——npm 版本不同会改压缩元数据：v0.15.0 实测本地 npm 10.9.8 得 `4790db5f…`、云端 npm 11.x 得 `b80b21cb…`，但两份解包后的目录 `diff -r` 完全一致。所以有意义的检查是「各发布渠道互相一致」，不是「和本地包的字节一致」。
 
 界面效果由作者本人在真实 GUI 里看，不列入发版门禁：自动化开浏览器只能证明「没白屏」，证明不了观感对不对。
 
