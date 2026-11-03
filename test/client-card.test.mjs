@@ -3560,7 +3560,7 @@ async function main() {
     check('the trail page carries the headline the host answered', trail().findAll((node) => node.props?.['data-vw-trail-count'] !== undefined)[0].props.children === '1,557')
     check("the trail page drops the search box and the rail", !bodyText().includes("data-vw-search") && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 0)
     check('the trail page names the conversations that asked', bodyText().includes('喜鹊服务配置与插件安装'))
-    check('the trail page shows passkey export audits', bodyText().includes('通行密钥导出') && bodyText().includes('telegram.org') && bodyText().includes('完全权限'))
+    check('the trail page shows passkey usage audits', bodyText().includes('通行密钥调用') && bodyText().includes('telegram.org') && bodyText().includes('完全权限'))
     // The board is data first: one bar per day of the window, then the three
     // busiest names on each side of the gate. More names must not sneak in —
     // the animation is specified to follow three, and a fourth label at 320px
