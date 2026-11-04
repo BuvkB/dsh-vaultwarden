@@ -10,7 +10,7 @@
  *
  * Run: node test/unmask.test.mjs
  */
-import { maskProjection, maskValue, PLACEHOLDER_RE } from '../lib/mask.js'
+import { historyFieldName, maskProjection, maskValue, PLACEHOLDER_RE } from '../lib/mask.js'
 import { isTagFingerprint, lookupFingerprint, maskSlots, previewOf, tagIndex } from '../lib/unmask.js'
 
 let passed = 0
@@ -104,10 +104,10 @@ check('the ssh key resolves through sshKey:privateKey', (() => {
   const hit = resolve(projection.sshKey.privateKey)
   return Boolean(hit) && hit.field === 'sshKey:privateKey' && hit.kind === 'SSHKEY'
 })(), JSON.stringify(resolve(projection.sshKey.privateKey)))
-check('a historical password resolves by its position', (() => {
+check('a historical password resolves through its stable date+value slot', (() => {
   const first = resolve(projection.passwordHistory[0].password)
   const second = resolve(projection.passwordHistory[1].password)
-  return Boolean(first) && Boolean(second) && first.field === 'history:0' && second.field === 'history:1'
+  return Boolean(first) && Boolean(second) && first.field === historyFieldName(ITEM.passwordHistory[0]) && second.field === historyFieldName(ITEM.passwordHistory[1])
 })(), JSON.stringify([resolve(projection.passwordHistory[0].password)?.field, resolve(projection.passwordHistory[1].password)?.field]))
 check('identity numbers resolve as identity:<name>', (() => {
   const hit = resolve(projection.identity.ssn)
@@ -144,7 +144,7 @@ check('but it is not the notes tag', Boolean(secureMatch) && Boolean(longMatch) 
 check('a long value shows four characters and dots', previewOf(PASSWORD) === 'Adm1••••••…', previewOf(PASSWORD))
 check('a short value shows no characters at all', previewOf('1234567') === '••••••…', previewOf('1234567'))
 check('the preview is never the value', !previewOf(PASSWORD).includes('Passw0rd'))
-check('exactly eight characters still shows four', previewOf('abcdefgh') === 'abcd••••••…', previewOf('abcdefgh'))
+check('eight characters show nothing; a preview must not leak most of a short secret', previewOf('abcdefgh') === '••••••…', previewOf('abcdefgh'))
 
 // ── misses: the ways a card keeps its bare placeholder ───────────────────────
 // A marker is a sweeper rewrite with no salt to recompute.

@@ -155,7 +155,7 @@ async function main() {
   // render it masked behind a click. Both halves are pinned here, because a
   // fix that narrowed the panel too would silently empty the owner's screen.
   const modelView = JSON.parse(await client.get('cipher-github', 'all', undefined, { maskHiddenFields: true }))
-  check('the tool projection hides a hidden custom field value', modelView.fields?.[1]?.value === '<hidden>', JSON.stringify(modelView.fields))
+  check('the tool projection hides a hidden custom field value', modelView.fields?.[1]?.value === null && modelView.fields?.[1]?.hidden === true, JSON.stringify(modelView.fields))
   check('the tool projection still names the hidden field', modelView.fields?.[1]?.name === 'API Token')
   check('the tool projection keeps an ordinary custom field', modelView.fields?.[0]?.value === 'jindom', JSON.stringify(modelView.fields?.[0]))
   const panelView = JSON.parse(await client.get('cipher-github'))

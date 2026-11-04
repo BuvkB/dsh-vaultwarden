@@ -177,6 +177,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== placeholder mask test (stable tags, per-field salt, coverage) ==="
   node test/mask.test.mjs
 
+  # The model-facing password flow: masked reads, scalar reveal values,
+  # placeholder handles, fieldName selection, hidden-field sentinels and the
+  # write guard that keeps a copied projection out of the vault.
+  echo "=== password flow test (masked read / reveal / write guard) ==="
+  node test/secret-flow.test.mjs
+
   # Log sweep: the redaction contract for on-disk session logs, plus the two
   # corruption classes a sweep must never reintroduce (a log written as one
   # zstd frame loses its session; a rewritten tool/call with a stale

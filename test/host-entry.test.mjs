@@ -136,7 +136,18 @@ async function main() {
     const report = plugins[0]?.config?.owner?.getSettings?.()
     return report?.maskEnabled === true && report?.maskMode === true
   })(), JSON.stringify({ maskEnabled: plugins[0]?.config?.owner?.getSettings?.()?.maskEnabled, maskMode: plugins[0]?.config?.owner?.getSettings?.()?.maskMode }))
-  check('the host form exposes a volatile maskEnabled switch', Config?.dict?.maskEnabled?.meta?.volatile === true && Config?.dict?.maskEnabled?.meta?.default === true)
+  check(
+    'the host form exposes a volatile maskEnabled switch',
+    Config?.dict?.maskEnabled?.meta?.volatile === true && Config?.dict?.maskEnabled?.meta?.default === true,
+    JSON.stringify({ volatile: Config?.dict?.maskEnabled?.meta?.volatile, default: Config?.dict?.maskEnabled?.meta?.default }),
+  )
+  check(
+    'legacy maskMode:false survives the Config default materialisation',
+    (() => {
+      const value = Config?.['~standard']?.validate?.({ maskMode: false })?.value
+      return value?.maskMode === false && value?.maskEnabled?.get?.() === true
+    })(),
+  )
   check('every Config field is volatile (host form renders them)', (() => {
     const schema = Config
     const fields = schema?.dict ?? {}
@@ -269,6 +280,26 @@ async function main() {
   check('the icon layers two vivid flat shields (host artwork style)', iconSource().includes('fill="#2E6BE6"') && iconSource().includes('fill="#6C4DF6"'))
   check('the front shield carries the hollow white keyhole', /M512 208 C600 208 690 222 742 236/.test(iconSource()) && iconSource().includes('fill="#ffffff"'))
   check('the keyhole is knocked out (ring and stem, legible at 30px)', /<circle cx="512" cy="452" r="52" fill="#ffffff"/.test(iconSource().replace(/\s+/g, ' ')) && iconSource().includes('M486 496 H538'))
+
+  // ── legacy maskMode:false must survive the new default ───────────────────────
+  const legacyConfig = Config['~standard'].validate({ maskMode: false }).value
+  apply(fakeCtx, {
+    ...legacyConfig,
+    serverUrl: ref('https://vault.example.com'),
+    email: ref('me@example.com'),
+    masterPassword: ref('secret'),
+    websocket: ref(false),
+    pollIntervalSeconds: ref(60),
+    cacheMinutes: ref(30),
+    deviceIdentifier: ref(''),
+    accessMode: ref('readonly'),
+  })
+  const legacySettings = plugins.at(-1)?.config?.owner?.getSettings?.()
+  check(
+    'legacy maskMode:false resolves to masking off',
+    legacySettings?.maskEnabled === false && legacySettings?.maskMode === false,
+    JSON.stringify({ maskEnabled: legacySettings?.maskEnabled, maskMode: legacySettings?.maskMode }),
+  )
 
   // ── degraded configuration must not throw ───────────────────────────────────
   const emptyCtx = { ...fakeCtx, tools: { register: () => () => {} }, systemPrompt: { section: () => () => {} } }
