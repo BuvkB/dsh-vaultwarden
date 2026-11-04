@@ -316,6 +316,7 @@ export async function buildFixtures(options = {}) {
             keyCurve: encryptString('P-256', userKey),
             keyValue: encryptString(b64url(passkeyPkcs8), userKey),
             rpId: encryptString('reprompt.example', userKey),
+            userHandle: encryptString(b64url(Buffer.from('reprompt-user-1')), userKey),
             userName: encryptString('reprompt-user', userKey),
             counter: encryptString('0', userKey),
             discoverable: encryptString('true', userKey),

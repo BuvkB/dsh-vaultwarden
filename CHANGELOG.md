@@ -4,6 +4,27 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0-rc.1] — 2026-11-04
+
+### 新增
+
+- 新增 `webauthn-credential/v2` 导出格式：`cdp` 与 `playwright` 双块，支持 Raw CDP / Puppeteer / Playwright CDPSession / Selenium 与 Playwright Credentials。
+- 新增 `test/ego-webauthn.integration.mjs` 可选集成测试与 `test/passkey-docs.test.mjs` 文档契约测试。
+- 新增 `bitwarden_passkey_export` 可选 `signCount` 参数与 `counter` / `counterWarning` 返回。
+
+### 修复
+
+- 修复 通行密钥导出未校验 resident userHandle、64 字节上限、signCount 与布尔字段的问题。
+- 修复 v2 wrapper 的 userName / userDisplayName / rpName / created 元数据在导入时丢失的问题。
+- 修复 `.tmp` 导出文件不被 prune / cleanup 清理的问题。
+- 修复 reprompt 条目可被无主密码证明导入或移除通行密钥的问题。
+- 修复 导出提示未明确禁止读取或打印私钥内容的问题。
+
+### 优化
+
+- 优化 通行密钥文档改为多客户端矩阵，补充 Selenium Java/Python bytes 转换与 ego 单 heredoc 约束。
+- 优化 发版复验支持 RC 的 rc dist-tag。
+
 ## [0.16.0] — 2026-11-03
 
 ### 功能

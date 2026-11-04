@@ -20,8 +20,8 @@
  *   2. the two assets are the same bytes (same digest) — the marketplace
  *      downloads the stable name while humans download the versioned one, and
  *      a release where they differ ships two different packages;
- *   3. npm serves this version and marks it `latest`, so the marketplace's
- *      update probe sees it.
+ *   3. npm serves this version and marks it `latest` (stable) or `rc`
+ *      (release candidate), so the marketplace's update probe sees it.
  *
  * Usage: node scripts/verify-release.mjs [vX.Y.Z]
  * Exit code 1 when any check fails.
@@ -55,6 +55,7 @@ try {
 }
 if (release) {
   check('the release is published (not a draft)', release.isDraft === false)
+  if (version.includes('-')) check('the release is a prerelease', release.isPrerelease === true)
   const assets = Array.isArray(release.assets) ? release.assets : []
   const byName = new Map(assets.map((asset) => [asset.name, asset]))
   const versioned = byName.get(`${pkg.name}-${version}.tgz`)
@@ -79,13 +80,14 @@ try {
 }
 check('npm serves this version', npmVersion === version, npmVersion || 'not found')
 
-let latest = ''
+const distTag = version.includes('-') ? 'rc' : 'latest'
+let tagged = ''
 try {
-  latest = run('npm', ['view', pkg.name, 'dist-tags.latest']).trim().replace(/^'|'$/g, '')
+  tagged = run('npm', ['view', pkg.name, `dist-tags.${distTag}`]).trim().replace(/^'|'$/g, '')
 } catch {
   /* reported below */
 }
-check('npm marks it latest', latest === version, latest || 'unknown')
+check(`npm marks it ${distTag}`, tagged === version, tagged || 'unknown')
 
 console.log('')
 if (failed > 0) {

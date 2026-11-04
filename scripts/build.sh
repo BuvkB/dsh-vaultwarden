@@ -146,6 +146,16 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== passkey vault test (metadata / gated export / import) ==="
   node test/passkey.test.mjs
 
+  echo "=== passkey docs contract test (multi-client recipe) ==="
+  node test/passkey-docs.test.mjs
+
+  if [ -n "${EGO_BROWSER_BIN:-}" ]; then
+    echo "=== ego WebAuthn integration test ==="
+    node test/ego-webauthn.integration.mjs
+  else
+    echo "=== ego WebAuthn integration test (skipped: EGO_BROWSER_BIN not set) ==="
+  fi
+
   # The on-disk privacy contract every record obeys: exclusive-create temp path
   # (a wider file already sitting there is never reused), 0600 carried by the
   # fresh inode instead of a chmod afterwards, no predictable temp name, and a

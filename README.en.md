@@ -16,7 +16,7 @@ A **Vaultwarden / Bitwarden** integration for DeepSeek Harness. Browse and edit 
 - **Vault panel**: sections, search, paging, entry details, TOTP countdown, copy, create/edit, archive/trash/restore and folder moves; write actions follow the plugin's access tier.
 - **Masking & log scrubbing**: passwords, TOTP codes and card data are returned as stable placeholders, fetchable per entry and field; plaintext in session logs is periodically replaced with `[REDACTED:BW]`, with incremental and immediate sweeps.
 - **Masking dashboard**: daily totals, top conversations/models and a drill-down masking ledger.
-- **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier, with import, remove and temporary-file cleanup; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
+- **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier (v2 with `cdp` and `playwright` blocks for CDP clients and Playwright), with import, remove and temporary-file cleanup; login recipe in [docs/passkey-login.md](docs/passkey-login.md).
 - **Permissions & security**: read-only / ask / full-access tiers; when the DSH session is `workspace-write` or `read-only`, writes and passkey exports still go through host approval. The panel uses the host's authenticated `/api` RPC; the plugin serves no HTTP route of its own. Master password and API keys are write-only fields.
 - **Settings page**: connection, sign-in, two-factor and plugin permissions in one place, for both self-hosted servers and Bitwarden Cloud.
 
