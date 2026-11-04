@@ -4,7 +4,7 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.17.0-rc.1] — 2026-11-04
+## [0.17.0] — 2026-11-04
 
 ### 新增
 
@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 优化
 
+- 优化 密码库工具栏合并为「实时同步」状态徽标 + 单一「同步并刷新」按钮。
 - 优化 通行密钥文档改为多客户端矩阵，补充 Selenium Java/Python bytes 转换与 ego 单 heredoc 约束。
 - 优化 发版复验支持 RC 的 rc dist-tag。
 

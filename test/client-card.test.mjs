@@ -577,20 +577,24 @@ async function main() {
   const monograms = rows().map((row) => String(row.children[0]?.children?.[0] ?? ''))
   check('no list entry is reduced to its leading digit', !monograms.includes('1'), JSON.stringify(monograms))
   check('an IP-named entry takes its glyph from the username', monograms[3] === 'D', JSON.stringify(monograms))
-  check('panel shows the sync chip', text().includes('实时同步'))
-  // The chip is also the manual-sync control and carries a hover tooltip.
+  check('panel shows the sync status chip', text().includes('实时同步'))
+  // The chip is a status badge now; the toolbar's one sync action owns the
+  // network operation and the hover tooltip.
   {
-    const chip = renderer.root.findAllByType('button').find((node) => /实时同步|轮询|同步已关闭/.test(String(node.props.children?.[1] ?? '')))
-    check('the sync chip is a clickable control', Boolean(chip) && chip.props.type === 'button', chip ? String(chip.props.children?.[1]) : 'not found')
+    const chip = renderer.root.findAll((node) => node.props?.['data-vw-sync-status'] === '')[0]
+    check('the sync chip is a status badge, not a button', Boolean(chip) && chip.type === 'span', chip ? chip.type : 'not found')
     check('the sync chip carries a tooltip', Boolean(chip?.props.title) && /同步方式/.test(chip.props.title), String(chip?.props.title).slice(0, 60))
+    const syncAction = renderer.root.findAllByType('button').find((node) => node.props?.['data-vw-sync-action'] === '')
+    check('the toolbar exposes one sync action', Boolean(syncAction) && syncAction.props.type === 'button', syncAction ? 'found' : 'not found')
+    check('the sync action carries a tooltip', Boolean(syncAction?.props.title) && /同步并刷新/.test(syncAction.props.title), String(syncAction?.props.title))
     const syncCallsBefore = rpc.calls.filter((call) => call.method === 'sync').length
     await act(async () => {
-      chip.props.onClick()
+      syncAction.props.onClick()
     })
     await act(async () => {
       await sleep(50)
     })
-    check('clicking the chip triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
+    check('clicking the sync action triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
   }
   // ── one round trip, and no sign-in for a stored session ──────────────────
   // Opening used to cost two sequential RPCs (config, then session), and the
