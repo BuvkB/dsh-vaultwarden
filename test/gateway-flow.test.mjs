@@ -501,14 +501,16 @@ async function main() {
     const os = await import('node:os')
     const fs = await import('node:fs')
     const path = await import('node:path')
+    const { CacheStore } = await import('../lib/cache-store.js')
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vw-editor-'))
     const store = { path: path.join(dir, 'session.json') }
+    const cache = new CacheStore(path.join(dir, 'vault-cache.json.gz'))
     const editorServer = await startMockServer({ twoFactor: false })
     const gateway = Object.create(VaultGateway.prototype)
     const editorSettings = { serverUrl: editorServer.url, email: EMAIL, masterPassword: PASSWORD }
-    let client = new VaultClient({ ...editorSettings, sessionStore: store })
+    let client = new VaultClient({ ...editorSettings }, { sessionStore: store, cacheStore: cache })
     gateway.getClient = () => client
-    gateway.createClient = (override) => new VaultClient({ ...editorSettings, ...override, sessionStore: store })
+    gateway.createClient = (override) => new VaultClient({ ...editorSettings, ...override }, { sessionStore: store, cacheStore: cache })
     gateway.owner = { getSettings: () => ({ email: EMAIL, accessMode: 'auto' }), update: async () => {} }
     gateway.guard = () => null
     gateway.mutations = null
@@ -544,6 +546,16 @@ async function main() {
     // next list read show it.
     const synced = await gateway.sync()
     check('a sync after a write reports the vault', synced?.ok === true && Number(synced?.items) > 0, JSON.stringify(synced))
+    // The panel's routine click asks for `force: false`: after the sync above
+    // the revision is current, so the second click must answer from the
+    // revision probe without downloading the vault again.
+    const syncsBeforeNoop = editorServer.stats.syncs
+    const noop = await gateway.sync(false)
+    check(
+      'a routine sync skips the download when the revision is unchanged',
+      noop?.changed === false && Number(noop?.items) > 0 && editorServer.stats.syncs === syncsBeforeNoop,
+      JSON.stringify({ changed: noop?.changed, items: noop?.items, syncs: `${syncsBeforeNoop}→${editorServer.stats.syncs}` }),
+    )
     const listed = await gateway.list('', 50)
     check('the synced vault still reads back the entry', listed?.items?.some((item) => item.id === 'cipher-github') === true, JSON.stringify(listed?.items?.map((item) => item.id)))
 

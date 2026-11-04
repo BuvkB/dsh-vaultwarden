@@ -594,7 +594,9 @@ async function main() {
     await act(async () => {
       await sleep(50)
     })
+    const syncCall = rpc.calls.filter((call) => call.method === 'sync').at(-1)
     check('clicking the sync action triggers a manual sync', rpc.calls.filter((call) => call.method === 'sync').length > syncCallsBefore)
+    check('the sync action asks for the incremental path', syncCall?.args?.force === false, JSON.stringify(syncCall?.args))
   }
   // ── one round trip, and no sign-in for a stored session ──────────────────
   // Opening used to cost two sequential RPCs (config, then session), and the

@@ -4,6 +4,12 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 修复
+
+- 修复 密码库「同步并刷新」每次都强制全量下载：修订号未变时跳过下载，无变化时不闪列表。
+
 ## [0.17.0] — 2026-11-04
 
 ### 新增
