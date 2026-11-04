@@ -72,8 +72,6 @@ node test/client-card.test.mjs
 node test/trail.test.mjs
 ```
 
-发布流程见 [docs/release.md](docs/release.md)。
-
 ## 链接
 
 - [GitHub Releases](https://github.com/BuvkB/dsh-vaultwarden/releases)
