@@ -81,3 +81,4 @@ await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: doc.cdp 
 | `passkey_proof_required` | 运行中的插件还是旧模块 | 重启插件/宿主，或重新保存插件设置触发热加载 |
 
 导出文件内含私钥：只通过 0600 路径交接，不要把文件内容打印到对话或日志。
+（本机通过dsh-ego-browser插件调用通行秘钥成功，其他cdp浏览器未进行测试，如有问题请及时提出issue）
