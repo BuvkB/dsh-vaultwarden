@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修复 缓存快照先画出面板而 boot 未返回时打开设置页，权限/脱敏两张卡停在默认档位：boot 落地后按真实配置重新播种。
 - 修复 状态探针在脱敏开关切换进行中落地时，可能把刚保存的开关在界面上回拨：本地切换时间戳之后的探针值才被应用。
 - 修复 iOS PWA（standalone）里「完全权限」下拉点不开：iOS WebKit 会把尺寸容器（`container-type: inline-size`）内绝对定位的后代画到后续静态兄弟之下，下拉展开却不可见；页签条改为显式层叠上下文，权限按钮加 `touch-action: manipulation`。
+- 修复 iOS PWA 里「实时同步」徽章的小灯不显示：小灯改为内嵌 SVG 圆并使用字面色值（绿/黄/红/灰），不再依赖宿主主题变量链与空元素背景绘制；徽章边框保留主题变量。
 
 ## [0.17.0] — 2026-11-04
 
