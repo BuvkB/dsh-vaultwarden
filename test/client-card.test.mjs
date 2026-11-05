@@ -4235,6 +4235,142 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+
+  // ── the per-tab scroll memory ─────────────────────────────────────────────
+  // Switching tabs parks and restores each page's own scroll offset. The
+  // drill-state reset (selectedId/editor) used to also run on tab switches;
+  // committing after the restore effect, it pinned every page back to the
+  // top and the per-tab memory never worked. These assertions fail on that
+  // regression: every restore must survive the passive-effect pass.
+  {
+    const boxes = []
+    const createNodeMock = (element) => {
+      const node = { scrollTop: 0, scrollHeight: 4000, clientHeight: 600 }
+      if (element && element.props && element.props['data-scroll-area'] === '') boxes.push(node)
+      return node
+    }
+    const scrollPanel = await mountPanel(mod, {}, makeRpc(), { createNodeMock })
+    await flush()
+    const tabs = () => scrollPanel.renderer.root.findAll((node) => node.props?.role === 'tab')
+    const scroller = () => boxes[boxes.length - 1]
+    check('tab scroll: both tabs are reachable', tabs().length === 2, String(tabs().length))
+    scroller().scrollTop = 300
+    await act(async () => { tabs()[1].props.onClick() })
+    await flush(120)
+    check('the trail opens at its own (first-visit) top', scroller().scrollTop === 0, String(scroller().scrollTop))
+    scroller().scrollTop = 520
+    await act(async () => { tabs()[0].props.onClick() })
+    await flush(120)
+    check('coming back to the list restores its parked offset', scroller().scrollTop === 300, String(scroller().scrollTop))
+    await act(async () => { tabs()[1].props.onClick() })
+    await flush(120)
+    check('returning to the trail restores its parked offset', scroller().scrollTop === 520, String(scroller().scrollTop))
+    await act(async () => { scrollPanel.renderer.unmount() })
+  }
+
+  // ── the post-sync re-read must carry the live query ───────────────────────
+  // syncAndRefresh captured the query at click time. A sync that runs for
+  // seconds while the reader types painted the OLD query's rows over the
+  // newer answer, and the generation guard discarded the newer one, so the
+  // stale rows stuck until the next keystroke.
+  {
+    let releaseSync = null
+    const syncRpc = makeRpc({
+      sync: () => new Promise((resolve) => { releaseSync = () => resolve({ ok: true, items: 4, changed: true }) }),
+    })
+    const panel = await mountPanel(mod, {}, syncRpc)
+    await flush()
+    const searchInput = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-search'] === '')[0]
+    const syncAction = () => panel.renderer.root.findAllByType('button').find((node) => node.props?.['data-vw-sync-action'] === '')
+    await act(async () => { syncAction().props.onClick() })
+    await flush(20)
+    check('stale-query setup: the sync is in flight', typeof releaseSync === 'function')
+    await act(async () => { searchInput().props.onChange({ target: { value: 'SHUJU' } }) })
+    await act(async () => { await sleep(300) })
+    const midQueries = syncRpc.calls.filter((call) => call.method === 'list').map((call) => call.args?.query)
+    check('the keystroke read went out while the sync was pending', midQueries.includes('SHUJU'), JSON.stringify(midQueries))
+    await act(async () => { releaseSync?.() })
+    await act(async () => { await sleep(80) })
+    const listQueries = syncRpc.calls.filter((call) => call.method === 'list').map((call) => call.args?.query)
+    check('the post-sync re-read carries the live query', listQueries[listQueries.length - 1] === 'SHUJU', JSON.stringify(listQueries))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── the settings cards re-seed when the boot config lands late ────────────
+  // A cached snapshot paints the panel (and its gear) before boot answers;
+  // the settings page mounted in that window seeded its two security cards
+  // from initial === undefined and kept the defaults after boot answered
+  // with the real tier.
+  {
+    const { mod: reloaded } = loadModule()
+    let releaseBoot = null
+    const lateBoot = makeRpc({
+      boot: () => new Promise((resolve) => {
+        releaseBoot = () => resolve(bootWith({ ...CONFIG_VALUE, accessMode: 'auto', maskEnabled: false, maskMode: false }, true, AUTHED_SESSION))
+      }),
+    })
+    const panel = await mountPanel(reloaded, {}, lateBoot, { keepCache: true })
+    const gear = () => panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+    check('late-config setup: the gear exists before boot answers', Boolean(gear()), 'no gear yet')
+    await act(async () => { gear().props.onClick() })
+    await flush(40)
+    const text = () => JSON.stringify(panel.renderer.toJSON())
+    check('the cards paint the defaults while boot is pending', text().includes('当前：只读') && text().includes('已开启'), 'defaults missing')
+    await act(async () => { releaseBoot?.() })
+    await act(async () => { await sleep(80) })
+    check('the permission card re-seeds to the real tier', text().includes('当前：完全权限'), 'tier not re-seeded')
+    check('the masking card re-seeds to the real switch', text().includes('已关闭'), 'mask not re-seeded')
+    await act(async () => { panel.renderer.unmount() })
+  }
+
+  // ── masking toggles survive in-flight status probes ───────────────────────
+  // Every readVault fires a status probe. A probe that launched BEFORE a
+  // masking toggle carries the older server value; landing it after the
+  // toggle must not flip the switch back. Two guards cover this: the read
+  // generation (the toggle's own re-render re-reads and supersedes the old
+  // probe) and the local-toggle stamp in landReport. The sequence below
+  // releases every probe shape — pre-toggle stale, post-toggle fresh — and
+  // requires the switch to stay where the operator put it throughout.
+  {
+    const pending = []
+    const launchLog = []
+    let toggledAt = false
+    const staleRpc = makeRpc({
+      status: () => new Promise((resolve) => {
+        launchLog.push(toggledAt ? 'after' : 'before')
+        // An honest host: a probe launched after the toggle answers with the
+        // new value; one launched before carries the old one.
+        pending.push(() => resolve({ ok: true, value: { ...STATUS_REPORT, maskEnabled: !toggledAt, maskMode: !toggledAt } }))
+      }),
+    })
+    const panel = await mountPanel(mod, {}, staleRpc)
+    await flush()
+    const searchInput = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-search'] === '')[0]
+    await act(async () => { searchInput().props.onChange({ target: { value: 'SHUJU' } }) })
+    await act(async () => { await sleep(300) })
+    const gear = () => panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+    await act(async () => { gear().props.onClick() })
+    const text = () => JSON.stringify(panel.renderer.toJSON())
+    const toggle = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-mask-toggle'] !== undefined)[0]
+    await act(async () => { toggle().props.onClick() })
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.['data-vw-mask-confirm'] !== undefined)[0].props.onClick() })
+    await act(async () => { await sleep(40) })
+    toggledAt = true
+    check('probe race setup: the card reports the switch off', text().includes('已关闭'), 'toggle did not land')
+    check('probe race setup: pre-toggle probes are in flight', launchLog.length >= 2 && launchLog[0] === 'before', JSON.stringify(launchLog))
+    await act(async () => { panel.renderer.root.findAll((node) => node.props?.['data-vw-settings-back'] !== undefined)[0].props.onClick() })
+    await flush(40)
+    const tabs = () => panel.renderer.root.findAll((node) => node.props?.role === 'tab')
+    check('the trail tab stands down while masking is off', tabs().length === 1, String(tabs().length))
+    await act(async () => { pending[0]?.() })
+    await act(async () => { await sleep(80) })
+    check('the pre-toggle probe does not resurrect the trail tab', tabs().length === 1, String(tabs().length))
+    await act(async () => { pending[pending.length - 1]?.() })
+    await act(async () => { await sleep(80) })
+    check('the fresh post-toggle probe agrees with the operator', tabs().length === 1 && launchLog.length >= 2, String(tabs().length) + ' ' + JSON.stringify(launchLog))
+    await act(async () => { panel.renderer.unmount() })
+  }
+
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
