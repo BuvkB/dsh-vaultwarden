@@ -2,6 +2,61 @@
 
 插件负责保管、解密和导出通行密钥；浏览器侧只负责执行标准 WebAuthn。**不需要修改 ego、Playwright、Puppeteer 或任何 CDP 插件。**
 
+## 0. 最快路径（一次跑完，可直接照抄）
+
+导出拿到的只是一个文件；真正登录还要在**同一个 `ego_script`** 里把虚拟认证器装进去。顺序不能反：**先注入，再导航**。
+
+```js
+const fs = await import('node:fs')
+const doc = JSON.parse(fs.readFileSync('<bitwarden_passkey_export 返回的 path>', 'utf8'))
+
+// 1) 认证器先装好 —— 装完之前不要导航
+await cdp('WebAuthn.enable', {})
+const { authenticatorId } = await cdp('WebAuthn.addVirtualAuthenticator', {
+  options: {
+    protocol: 'ctap2',
+    transport: 'internal',
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+    automaticPresenceSimulation: true,
+  },
+})
+await cdp('WebAuthn.addCredential', { authenticatorId, credential: doc.cdp })
+
+// 2) 再打开登录页；落在账号输入页才填
+await page.goto('<站点登录页>')
+if (String(await page.url()).includes('identifier')) {
+  await page.locator('#identifierId').fill('<账号>')
+  await page.getByRole('button', { name: '下一步' }).click()
+}
+
+// 3) 等断言静默完成；target 可能被换掉，url() 要兜住
+for (let i = 0; i < 25; i++) {
+  await page.waitForTimeout(1000)
+  let current = ''
+  try {
+    current = String(await page.url())
+  } catch {
+    break
+  }
+  if (current.includes('<登录成功后的域名>')) break
+}
+```
+
+三条要点：
+
+- **先注入、后导航。** 登录挑战页一加载就发起 `navigator.credentials.get()`；晚注入只能靠 `page.reload()` 补救，而 reload 会换掉 CDP target，后续 `ego_page_info` 会报 `browser connection closed`。
+- **先判登录态。** 持久 profile 往往还在登录，先 `page.goto` 目标站；真落到登录页才需要 `bitwarden_passkey_export`。
+- **一个脚本跑完。** `ego_cdp` 每次调用都是新 session，拆开必然报 `The Virtual Authenticator Environment has not been enabled for this session`。
+
+`bitwarden_passkey_export` 的返回里带了 `handoff`，不绑定某一个宿主：
+
+- `handoff.clients[]` 三套配方：`playwright`（Playwright 1.62+ `context.credentials`，**Chromium / Firefox / WebKit 通用**）、`cdp`（任意 Chromium 内核的裸 CDP：Puppeteer / Playwright CDPSession / Selenium / chrome-remote-interface）、`ego`（DSH `ego_script`，就是上面第 1 段）。每套的 `code` 里路径已填好，直接粘。
+- `handoff.engines[]` 给出引擎到客户端的映射：Chromium 两者皆可，**Firefox 和 Playwright 内置 WebKit 只能走 `playwright`**——CDP 虚拟认证器只在 Chromium 内核里存在。
+- 传了 `url`（和可选的 `account` / `submitText`）时，`playwright` 与 `ego` 两套会变成可整段执行的完整脚本（导航、填账号、点下一步、等跳转都写好），`cdp` 仍只给注入段（它不知道你用什么驱动）。
+- 桌面版 Safari 没有自动化接口（Playwright 的 WebKit 是独立构建），只能用系统 passkey、Bitwarden 扩展或硬件密钥。
+
 ## 1. 文件里有什么
 
 `bitwarden_passkey_export` 生成 `webauthn-credential/v2` 文件，权限 0600。核心是两个块：

@@ -108,6 +108,29 @@ async function main() {
     check('the counter becomes signCount', document.cdp.signCount === 0)
     check('the export reports the counter and its source', exported.counter === 0 && exported.counterSource === 'vault' && typeof exported.counterWarning === 'string', JSON.stringify({ counter: exported.counter, source: exported.counterSource, warning: exported.counterWarning }))
     check('discoverable becomes isResidentCredential', document.cdp.isResidentCredential === true)
+    // Export alone is not a login: the caller needs a per-client recipe, and it
+    // must be host-neutral — Playwright covers Chromium/Firefox/WebKit, raw CDP
+    // covers every Chromium automation, ego is one convenience on top of CDP.
+    const handoff = exported.handoff
+    const clientIds = handoff.clients.map((client) => client.id)
+    check('the export ships a multi-client handoff', handoff?.version === 1 && clientIds.join() === 'playwright,cdp,ego', clientIds.join())
+    check('Playwright covers Chromium, Firefox and WebKit', handoff.clients[0].engines.includes('Firefox') && handoff.clients[0].engines.includes('WebKit'))
+    check('raw CDP is limited to Chromium', handoff.clients[1].engines.join() === 'Chromium')
+    check('every client code points at the exported file', handoff.clients.every((client) => client.code.includes(exported.path)))
+    check('the rules state the inject-before-navigate order', handoff.rules.some((rule) => rule.includes('注入必须早于导航')))
+    check('the handoff carries no key material', !JSON.stringify(handoff).includes(document.cdp.privateKey.slice(0, 16)))
+    // A login url upgrades the runnable clients to whole scripts.
+    const full = await client.exportPasskey('cipher-github', '', undefined, {
+      outputDir: exportDir,
+      surface: 'tool',
+      url: 'https://github.com/login',
+      account: 'octocat@example.com',
+    })
+    const fullById = Object.fromEntries(full.handoff.clients.map((client) => [client.id, client]))
+    check('a login url makes the portable clients complete', fullById.playwright.complete === true && fullById.ego.complete === true && fullById.cdp.complete === false)
+    check('the complete script navigates on its own', fullById.playwright.code.includes('await page.goto("https://github.com/login")'))
+    check('the complete script fills the account', fullById.playwright.code.includes('octocat@example.com'))
+    check('the complete script still injects before navigating', fullById.ego.code.indexOf('addVirtualAuthenticator') < fullById.ego.code.indexOf('page.goto'))
     // The audit trail answers who exported what, when — never the key itself.
     const auditLines = readFileSync(join(exportDir, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
     const audit = auditLines.at(-1)

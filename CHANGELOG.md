@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 新增
+
+- 新增 `bitwarden_passkey_export` 返回 `handoff`：Playwright / 裸 CDP / ego 三套客户端配方、引擎兼容矩阵与硬约束，不绑定单一宿主；新增可选 `url` / `account` / `submitText`，传 `url` 时 playwright 与 ego 直接产出可整段执行的登录脚本。
+- 新增 `docs/passkey-login.md`「0. 最快路径」：一次 `ego_script` 跑完「先注入、后导航」的完整登录脚本。
+
 ### 修复
 
 - 修复 密码库「同步并刷新」每次都强制全量下载：修订号未变时跳过下载，无变化时不闪列表。
