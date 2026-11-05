@@ -4371,6 +4371,22 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── the tab strip is its own stacking context (iOS WebKit) ────────────────
+  // The panel root is a size container (`containerType: inline-size`), and
+  // iOS Safari — PWA standalone in particular — paints absolutely-positioned
+  // descendants of a size container UNDER later static siblings, which made
+  // the permission dropdown open invisible on the phone. The strip carries
+  // position+z-index so its dropdown paints above the page body everywhere.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    const row = panel.renderer.root.findAll((node) => node.props?.['data-vw-tabs-row'] === '')[0]
+    check('the tab strip exists', Boolean(row), 'no tabs row')
+    check('the tab strip is an explicit stacking context (iOS WebKit)', row?.props?.style?.position === 'relative' && row?.props?.style?.zIndex === 1, JSON.stringify(row?.props?.style))
+    const pill = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu'] === '')[0]
+    check('the permission pill opts out of iOS double-tap zoom', pill?.props?.style?.touchAction === 'manipulation', JSON.stringify(pill?.props?.style))
+    await act(async () => { panel.renderer.unmount() })
+  }
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
