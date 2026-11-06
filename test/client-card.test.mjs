@@ -4387,6 +4387,26 @@ async function main() {
     check('the permission pill opts out of iOS double-tap zoom', pill?.props?.style?.touchAction === 'manipulation', JSON.stringify(pill?.props?.style))
     await act(async () => { panel.renderer.unmount() })
   }
+  // ── the sync dot must not animate on touch devices ────────────────────────
+  // iOS WebKit (PWA standalone) stops PAINTING the dot once the breathing
+  // animation is attached: the box keeps its layout space and nothing is
+  // drawn (measured on a device — the non-animated idle dot paints, the
+  // animated ok dot leaves an empty gap). The animation therefore lives
+  // behind `hover: hover` + `pointer: fine`; a touch device gets a still dot
+  // whose colour still carries the state.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    const sheet = panelSheetText
+    const gateAt = sheet.indexOf('@media (hover: hover) and (pointer: fine)')
+    const animAt = sheet.indexOf('animation: vw-breathe')
+    const pingAt = sheet.indexOf('animation: vw-ping')
+    check('the sync dot rule exists', sheet.includes('[data-vw-sync-dot="ok"]'), 'rule missing')
+    check('the dot\'s breathing animation is gated to pointer-fine devices', gateAt !== -1 && animAt > gateAt, 'gate@' + gateAt + ' anim@' + animAt)
+    check('the dot\'s ping ring is gated too', pingAt > gateAt, 'gate@' + gateAt + ' ping@' + pingAt)
+    check('no un-gated breathing rule for the dot', sheet.indexOf('animation: vw-breathe', animAt + 1) === -1, 'a second vw-breathe rule exists')
+    await act(async () => { panel.renderer.unmount() })
+  }
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
