@@ -4407,6 +4407,24 @@ async function main() {
     check('no un-gated breathing rule for the dot', sheet.indexOf('animation: vw-breathe', animAt + 1) === -1, 'a second vw-breathe rule exists')
     await act(async () => { panel.renderer.unmount() })
   }
+  // ── the tier menu must not be a floating layer (iOS PWA) ──────────────────
+  // It was an absolutely-positioned popover. On iOS WebKit (PWA standalone)
+  // the box opened but painted underneath the composited scroll area, so the
+  // tap read as a dead control — twice. The menu is now a sibling of the
+  // strip in normal flow, where stacking/clipping/compositing cannot hide it,
+  // and the touch target is finger-sized.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    const pill = () => panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu'] !== undefined)[0]
+    await act(async () => { pill().props.onClick() })
+    await flush()
+    const list = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu-list'] !== undefined)[0]
+    check('the tier menu opens', Boolean(list), 'no menu in the tree')
+    check('the tier menu renders in flow, not as a popover', list?.props?.style?.position === undefined && list?.props?.style?.zIndex === undefined, JSON.stringify(list?.props?.style))
+    check('the tier menu keeps every option reachable', panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length === 3, String(panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length))
+    await act(async () => { panel.renderer.unmount() })
+  }
   void t
   console.log(`\n${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
