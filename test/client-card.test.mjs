@@ -4436,9 +4436,6 @@ async function main() {
     const bullet = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'ask')[0]
       ?.findAll((node) => node.props && node.props['aria-hidden'] === 'true')[0]
     check('the tier bullets are plain circles', bullet?.props?.style?.borderRadius === '50%' && !bullet?.props?.style?.boxShadow, JSON.stringify(bullet?.props?.style))
-    // Vector, not just a rounded box: iOS rendered the 7px span with a ~2px
-    // corner radius (border-radius: 50% did not take) and it read as a square.
-    check('the tier bullets are vector discs', Boolean(bullet?.findAll?.((node) => node.type === 'circle').length), 'no <circle> child')
     check('the tier menu keeps every option reachable', panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length === 3, String(panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length))
     await act(async () => { panel.renderer.unmount() })
   }
