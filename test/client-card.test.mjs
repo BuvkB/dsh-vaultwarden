@@ -4429,6 +4429,11 @@ async function main() {
     check('the tier popover is the panel\'s last child (paint order)', lastChild?.props?.['data-vw-permission-menu-list'] !== undefined, JSON.stringify(Object.keys(lastChild?.props ?? {})))
     check('the tier popover is anchored over the content', list?.props?.style?.position === 'absolute' && list?.props?.style?.zIndex === 50, JSON.stringify(list?.props?.style))
     check('the tier popover carries its own compositing layer', Boolean(list?.props?.style?.transform) && Boolean(list?.props?.style?.willChange), JSON.stringify(list?.props?.style))
+    // A 7px disc must stay a disc: the inset box-shadow once added for the
+    // sync dot filled the box and turned every bullet into a rounded SQUARE.
+    const bullet = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'ask')[0]
+      ?.findAll((node) => node.props && node.props['aria-hidden'] === 'true')[0]
+    check('the tier bullets are plain circles', bullet?.props?.style?.borderRadius === '50%' && !bullet?.props?.style?.boxShadow, JSON.stringify(bullet?.props?.style))
     check('the tier menu keeps every option reachable', panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length === 3, String(panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length))
     await act(async () => { panel.renderer.unmount() })
   }
