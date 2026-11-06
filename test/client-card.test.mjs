@@ -4427,10 +4427,10 @@ async function main() {
     const tree = panel.renderer.toJSON()
     const lastChild = tree?.children?.[tree.children.length - 1]
     check('the tier popover is the panel\'s last child (paint order)', lastChild?.props?.['data-vw-permission-menu-list'] !== undefined, JSON.stringify(Object.keys(lastChild?.props ?? {})))
-    check('the tier popover is anchored over the content', list?.props?.style?.position === 'absolute', JSON.stringify(list?.props?.style))
-    // No promoted layer: a transform/z-index'd card inside this size-container
-    // stops painting on iOS WebKit. Paint order (last child) is the mechanism.
-    check('the tier popover is not promoted to its own layer', !list?.props?.style?.transform && !list?.props?.style?.willChange && list?.props?.style?.zIndex === undefined, JSON.stringify(list?.props?.style))
+    // A body-level fixed layer: the portal is what makes the card work in a
+    // standalone PWA, where a card rendered inside the panel lost the paint
+    // fight against the composited scroll area.
+    check('the tier popover is a viewport-level fixed layer', list?.props?.style?.position === 'fixed' && Number(list?.props?.style?.zIndex) >= 1000, JSON.stringify(list?.props?.style))
     // A 7px disc must stay a disc: the inset box-shadow once added for the
     // sync dot filled the box and turned every bullet into a rounded SQUARE.
     const bullet = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] === 'ask')[0]
