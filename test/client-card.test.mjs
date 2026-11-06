@@ -4421,7 +4421,14 @@ async function main() {
     await flush()
     const list = panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-menu-list'] !== undefined)[0]
     check('the tier menu opens', Boolean(list), 'no menu in the tree')
-    check('the tier menu renders in flow, not as a popover', list?.props?.style?.position === undefined && list?.props?.style?.zIndex === undefined, JSON.stringify(list?.props?.style))
+    // The original popover look, with the iOS fix baked in: the card is the
+    // panel's LAST child (so it paints after the scroll area whatever the
+    // engine composites) and carries its own layer.
+    const tree = panel.renderer.toJSON()
+    const lastChild = tree?.children?.[tree.children.length - 1]
+    check('the tier popover is the panel\'s last child (paint order)', lastChild?.props?.['data-vw-permission-menu-list'] !== undefined, JSON.stringify(Object.keys(lastChild?.props ?? {})))
+    check('the tier popover is anchored over the content', list?.props?.style?.position === 'absolute' && list?.props?.style?.zIndex === 50, JSON.stringify(list?.props?.style))
+    check('the tier popover carries its own compositing layer', Boolean(list?.props?.style?.transform) && Boolean(list?.props?.style?.willChange), JSON.stringify(list?.props?.style))
     check('the tier menu keeps every option reachable', panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length === 3, String(panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-option'] !== undefined).length))
     await act(async () => { panel.renderer.unmount() })
   }
