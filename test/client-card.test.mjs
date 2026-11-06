@@ -2261,8 +2261,12 @@ async function main() {
   }
 
   // ── the panel's own layout: nothing squeezes, nothing escapes ─────────────
-  // The scroll area is a flex column with a height budget (min(58vh, 560px)),
-  // and flex items shrink by default. A card taller than the budget therefore
+  // The panel fills the height the host gives it, and the scroll area takes
+  // what is left. The scroll area used to be a flex column with a fixed
+  // min(58vh, 560px) budget instead, which was harmless on the desktop dialog
+  // but left the panel floating in the top two thirds of the full-screen
+  // mobile settings sheet — the report that opened this fix. Flex items shrink
+  // by default, so a card taller than the budget therefore
   // had its BOX squeezed down to the budget while its content kept painting
   // past the card's surface onto the dialog background: in API-key mode the
   // client_id / client_secret rows, their hints and the button row appeared to
@@ -2277,6 +2281,17 @@ async function main() {
       'the scroll area keeps its content at its natural height',
       wrapper?.props.style?.flex === 'none',
       JSON.stringify(wrapper?.props.style),
+    )
+    const panelRoot = panel.renderer.root.findAll((node) => node.props?.className === 'vw-root')[0]
+    check(
+      'the panel fills the height the host gives it',
+      panelRoot?.props.style?.height === '100%' && panelRoot?.props.style?.boxSizing === 'border-box',
+      JSON.stringify(panelRoot?.props.style),
+    )
+    check(
+      'the scroll area takes the remaining height, not a viewport slice',
+      scroller?.props.style?.flex === '1 1 auto' && scroller?.props.style?.maxHeight === undefined,
+      JSON.stringify(scroller?.props.style),
     )
 
     // The same fix on the three full-screen cards, which is where the reported
