@@ -346,6 +346,10 @@ function makeRpc(overrides = {}) {
   return rpc
 }
 
+/** The bundle's matchMedia answers through this flag, so tests can flip the
+ *  mobile breakpoint without touching the loader. */
+const mobileMedia = { matches: false }
+
 /** Load the bundle once and return its materialized module. */
 function loadModule() {
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
@@ -355,6 +359,13 @@ function loadModule() {
   // registry, which is what lets `press` reach them.
   const windowStub = {
     __ModuleLoader__: { load: (value) => (entry = value) },
+    // The panel reads the host breakpoint through matchMedia (the mobile
+    // page-scroll mode); tests flip `mobileMedia.matches` to drive it.
+    matchMedia: (query) => ({
+      matches: /max-width:\s*767/.test(String(query)) && mobileMedia.matches,
+      addEventListener() {},
+      removeEventListener() {},
+    }),
     addEventListener: (type, handler) => {
       if (!windowListeners.has(type)) windowListeners.set(type, new Set())
       windowListeners.get(type).add(handler)
@@ -4421,6 +4432,69 @@ async function main() {
     check('the dot\'s ping ring is gated too', pingAt > gateAt, 'gate@' + gateAt + ' ping@' + pingAt)
     check('no un-gated breathing rule for the dot', sheet.indexOf('animation: vw-breathe', animAt + 1) === -1, 'a second vw-breathe rule exists')
     await act(async () => { panel.renderer.unmount() })
+  }
+  // ── on a phone the settings page scrolls as one ───────────────────────────
+  // The mobile sheet is the whole screen and the host scrolls it; the panel
+  // stands at its natural height there, so the list has no scroll events of
+  // its own and auto-paging has nothing to listen to. Two consequences are
+  // pinned here: the sheet-level scroller owns the scrolling (the earlier
+  // frozen-chrome attempt — a one-cell grid with overflow hidden — is gone),
+  // and the explicit 还有 N 条 control shows whenever a page is outstanding
+  // on a phone, because the scroll trigger it used to wait for never fires.
+  {
+    const panel = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    const sheet = panelSheetText
+    const mobileAt = sheet.indexOf('@media (max-width: 767px)')
+    check(
+      'the mobile block hands scrolling to the host page',
+      mobileAt !== -1 && sheet.indexOf('height: auto !important', mobileAt) > mobileAt && sheet.indexOf('padding-bottom: 0 !important', mobileAt) > mobileAt,
+      'mobile@' + mobileAt,
+    )
+    check(
+      'the frozen-chrome inner window stays out of the sheet',
+      !sheet.includes('grid-template-rows: minmax(0, 1fr);\n    overflow: hidden'),
+      'grid window left in the sheet',
+    )
+    await act(async () => { panel.renderer.unmount() })
+  }
+  // The mobile paging affordance: with matchMedia reporting the sheet
+  // breakpoint, a paged vault shows the explicit control as soon as the list
+  // is ready — no scroll event needed. Off the breakpoint (desktop, and the
+  // stub-less test default) the control waits for the outrun/busy paths.
+  {
+    const bigDictionaries = {}
+    const bigRpc = makeRpc({
+      list: (args) => {
+        const query = String(args.query ?? '')
+        const matched = query ? BIG_ITEMS.filter((item) => item.name.includes(query)) : BIG_ITEMS
+        const offset = Math.max(0, Number(args.offset) || 0)
+        const limit = Math.max(1, Math.min(Number(args.limit) || 200, 200))
+        const page = matched.slice(offset, offset + limit)
+        return { ok: true, value: { query, matched: matched.length, returned: page.length, offset, hasMore: offset + page.length < matched.length, vaultItems: BIG_COUNT, items: page } }
+      },
+    })
+    mobileMedia.matches = true
+    try {
+      const panel = await mountPanel(mod, bigDictionaries, bigRpc)
+      await flush()
+      check(
+        'a paged vault offers the control on a phone without scrolling',
+        panel.renderer.root.findAllByType('button').some((node) => node.props['data-load-more'] === ''),
+        'button missing',
+      )
+      await act(async () => { panel.renderer.unmount() })
+    } finally {
+      mobileMedia.matches = false
+    }
+    const desktop = await mountPanel(mod, {}, makeRpc())
+    await flush()
+    check(
+      'the desktop panel does not pre-show the control',
+      desktop.renderer.root.findAll((node) => node.props?.['data-load-more'] === '').length === 0,
+      'button pre-shown on desktop',
+    )
+    await act(async () => { desktop.renderer.unmount() })
   }
   // ── the tier menu must not be a floating layer (iOS PWA) ──────────────────
   // It was an absolutely-positioned popover. On iOS WebKit (PWA standalone)
