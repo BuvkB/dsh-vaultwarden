@@ -4,6 +4,13 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] — 2026-11-07
+
+### 修复
+
+- 修复 手机端密码库面板显示不全、底部留白：面板撑满设置页可用高度，内容区吃满剩余高度（去掉旧的 58vh 高度帽），手机端去掉面板底部多余留白。
+- 修复 手机端「密码列表 / 脱敏轨迹」页签条能被划动回弹：页签条是固定件不是滚动容器，删去遗留的 `overflow-x` 滚动规则——它让页签条成了横竖两轴的滚动容器（激活下划线下探 1px 加上亚像素宽度差凑出了真实溢出），iOS 给滚动容器的橡皮筋物理就在划动时拨动页签条本身。
+
 ## [0.17.1] — 2026-11-06
 
 ### 新增
