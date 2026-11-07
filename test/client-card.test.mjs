@@ -2261,8 +2261,10 @@ async function main() {
   }
 
   // ── the panel's own layout: nothing squeezes, nothing escapes ─────────────
-  // The scroll area is a flex column with a height budget (min(58vh, 560px)),
-  // and flex items shrink by default. A card taller than the budget therefore
+  // The scroll area is a flex column that takes the height the panel does not
+  // use — the panel fills a definite-height section and carries a 100vh
+  // ceiling for a host whose section grows with its content — and flex items
+  // shrink by default. A card taller than the budget therefore
   // had its BOX squeezed down to the budget while its content kept painting
   // past the card's surface onto the dialog background: in API-key mode the
   // client_id / client_secret rows, their hints and the button row appeared to
@@ -2278,6 +2280,19 @@ async function main() {
       wrapper?.props.style?.flex === 'none',
       JSON.stringify(wrapper?.props.style),
     )
+
+    // The height chain: the panel fills a definite-height section and the
+    // scroll area takes what the panel does not use — no fixed budget. The
+    // panel's 100vh ceiling is the compat floor for a host whose section grows
+    // with its content: there `height: 100%` degrades to auto, and the ceiling
+    // is the dialog-stretch guard the removed budget used to be. On every
+    // definite-height host the section is shorter than the viewport, so the
+    // ceiling never bites there.
+    const panelRoot = panel.renderer.root.findByProps({ className: 'vw-root' })
+    check('the panel carries the 100vh compat ceiling', panelRoot.props.style.maxHeight === '100vh', String(panelRoot.props.style.maxHeight))
+    check('the scroll area carries no height cap of its own', scroller.props.style.maxHeight === undefined, String(scroller.props.style.maxHeight))
+    const tabsStrip = panel.renderer.root.findByProps({ 'data-vw-tabs': '' })
+    check('the tab strip carries no inline scroll container', tabsStrip.props.style.overflowX === undefined, String(tabsStrip.props.style.overflowX))
 
     // The same fix on the three full-screen cards, which is where the reported
     // misalignment showed: the API-key setup form carries two extra fields and
@@ -2341,6 +2356,22 @@ async function main() {
       'a narrow panel does not cap the rail (a clipped row reads as broken)',
       !/\[data-vw-nav\][^}]*max-height/.test(sheet),
       'rail height cap still in the injected sheet',
+    )
+    // The strip's scroller returns only below the last step. Above ~170px the
+    // two labels fit, and a scroll container there would be the phantom-
+    // overflow rubber band the inline rule's removal fixed — so the rule must
+    // live inside the 170px query and nowhere else.
+    const q170 = sheet.indexOf('@container vw-panel (max-width: 170px)')
+    const tabScroller = '.vw-root [data-vw-tabs] { overflow-x: auto; scrollbar-width: none }'
+    check(
+      'the sliver scroller rule exists in the injected sheet',
+      q170 >= 0 && sheet.indexOf(tabScroller) > q170,
+      'q170@' + q170 + ' rule@' + sheet.indexOf(tabScroller),
+    )
+    check(
+      'the sliver scroller is scoped to the 170px query alone',
+      (sheet.match(/\[data-vw-tabs\] \{ overflow-x/g) || []).length === 1,
+      String((sheet.match(/\[data-vw-tabs\] \{ overflow-x/g) || []).length),
     )
   }
 
@@ -3590,6 +3621,15 @@ async function main() {
     check('the board names only the busiest three conversations', ['喜鹊服务配置与插件安装', '馒头保号登录', '脱敏流水详情页与移动端优化'].every((name) => bodyText().includes(name)) && !bodyText().includes('第四个会话不该上板'))
     check('the board draws one grey track for each real pair', root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length))
     check('each of the three full lines gets one moving particle', root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length))
+    // The particles are SMIL, so no stylesheet gate can reach them: the still
+    // board on touch and under reduced motion is decided in the render, by the
+    // same matchMedia answers the halo and scan bar carry into CSS. This page
+    // renders with neither answer set (no matchMedia here), which is why the
+    // three particles are on screen above.
+    check(
+      'the board particles stand down on coarse pointers in source',
+      readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8').includes("window.matchMedia('(pointer: coarse)')"),
+    )
     check('the gate line has a downward scan bar', root().findAll((node) => node.props?.['data-vw-gate-scan'] !== undefined).length === 1)
     check('the board says what is off the three names', bodyText().includes('另外 1 个会话') && bodyText().includes('另外 2 个模型'))
     check('the board carries the gate mark', root().findAll((node) => node.props?.['data-vw-trail-flow'] !== undefined)[0].findAll((node) => node.props?.title === '只放行脱敏后的请求').length === 1)

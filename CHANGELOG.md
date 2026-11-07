@@ -4,6 +4,15 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.3] — 2026-11-07
+
+### 修复
+
+- 修复 手机端设置页「返回 / 保存」按钮被 iOS 悬浮滚动条盖住：窄面板页头行加 12px 右留白，按钮离开滚动边缘（桌面经典滚动条有 `scrollbar-gutter` 预留，不加这一条）。
+- 修复 手机端脱敏看板鲸鱼徽章在 iOS PWA 中消失：徽章去掉 z-index 提升图层，改为依赖文档序绘制；门禁光圈与扫描动画收进样式表、仅桌面指针生效。SMIL 粒子同样按指针分流——它是样式表够不到的持续动画层，触屏拿到完全静止的看板（彩带、中缝与徽章仍在）。
+- 修复 面板窄于 ~170px 时「脱敏轨迹」页签够不到：页签条的滚动兜底只在 170px 档恢复。上方宽度两个页签放得下，滚动容器只会复现幽灵溢出的橡皮筋；sliver 宽度下第二个页签真的放不下，滚动是够到它的唯一方式。
+- 修复 旧版宿主（设置区块高度随内容增长）上面板把弹窗撑出视口：面板加 100vh 顶部兜底。definite 高度宿主（桌面 dialog 是 min(800px, 100vh − 48px)、手机 sheet 的选项行停在宿主自己的标题与导航之下）区块永远矮于视口，上限不生效；只在 `height: 100%` 退化为 auto 的宿主上接替被移除的 58vh 滚动预算，守住「弹窗不超一屏、列表内部滚动」。
+
 ## [0.17.2] — 2026-11-07
 
 ### 修复
