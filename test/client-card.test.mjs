@@ -3622,13 +3622,15 @@ async function main() {
     check('the board draws one grey track for each real pair', root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-flow-link'] !== undefined).length))
     check('each of the three full lines gets one moving particle', root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length === 3, String(root().findAll((node) => node.props?.['data-vw-trail-particle'] !== undefined).length))
     // The particles are SMIL, so no stylesheet gate can reach them: the still
-    // board on touch and under reduced motion is decided in the render, by the
-    // same matchMedia answers the halo and scan bar carry into CSS. This page
-    // renders with neither answer set (no matchMedia here), which is why the
+    // board under reduced motion is decided in the render. Touch is NOT a
+    // reason to stand them down — the traveller along the ribbons is the whole
+    // point of the board, and it was wrongly switched off for coarse pointers
+    // once already. This page renders with no matchMedia here, which is why the
     // three particles are on screen above.
+    const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
     check(
-      'the board particles stand down on coarse pointers in source',
-      readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8').includes("window.matchMedia('(pointer: coarse)')"),
+      'the board particles stand down only for reduced motion, never for touch',
+      /reduceMotion\s*\n\s*\?\s*null/.test(clientSource) && !clientSource.includes('pointerCoarse'),
     )
     check('the gate line has a downward scan bar', root().findAll((node) => node.props?.['data-vw-gate-scan'] !== undefined).length === 1)
     check('the board says what is off the three names', bodyText().includes('另外 1 个会话') && bodyText().includes('另外 2 个模型'))
