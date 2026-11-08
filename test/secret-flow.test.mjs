@@ -76,8 +76,12 @@ async function main() {
     const masked = JSON.parse(await getTool.execute({ id: 'cipher-github', field: 'password' }))
     check('masked read marks itself before the payload', Object.keys(masked)[0] === '_masked' && masked._masked === true)
     check('masked read lists the masked field', masked._maskedFields?.includes('password'))
-    check('masked read returns a placeholder, not plaintext', /^\{\{BW_PASSWORD_[a-z2-7]{8}\}\}$/.test(String(masked.password)))
-    check('masked read carries a reveal hint', /bitwarden_reveal/.test(String(masked._hint)))
+    check('masked read returns a placeholder, not plaintext', /^\{\{BW_PASSWORD_[a-z2-7]{8}\}\}$/.test(String(masked.passwordMasked)))
+    // The credential key itself must be gone: a call site that reads
+    // `payload.password` has to fail loudly instead of quietly receiving a
+    // look-alike string it would then type into a form.
+    check('masked read withholds the pristine password key', !('password' in masked))
+    check('masked read carries a reveal hint', /bitwarden_reveal/.test(String(masked._hint)) && /Masked/.test(String(masked._hint)))
 
     // 2. hidden custom fields are typed, not a fake string ---------------------------
     const all = JSON.parse(await getTool.execute({ id: 'cipher-github', field: 'all' }))
@@ -93,7 +97,7 @@ async function main() {
     check('reveal does not include the whole projection', !('password' in revealed) && !('notes' in revealed))
 
     // 4. a placeholder is itself a usable handle --------------------------------------
-    const byHandle = JSON.parse(await revealTool.execute({ placeholder: masked.password }))
+    const byHandle = JSON.parse(await revealTool.execute({ placeholder: masked.passwordMasked }))
     check('reveal by placeholder resolves the exact entry', byHandle.value === revealed.value && byHandle.entry?.id === 'cipher-github')
     check('reveal by placeholder keeps the field name', byHandle.field === 'password')
 
@@ -101,7 +105,9 @@ async function main() {
     const custom = JSON.parse(await revealTool.execute({ id: 'cipher-github', field: 'fields', fieldName: 'API Token' }))
     check('reveal fieldName returns only the named custom field', custom.value === 'tok_live_abc123' && custom.fieldName === 'API Token')
     const fieldsView = JSON.parse(await getTool.execute({ id: 'cipher-github', field: 'fields' }))
-    const customPlaceholder = fieldsView.fields?.find((entry) => entry.name === 'API Token')?.value
+    const customFieldView = fieldsView.fields?.find((entry) => entry.name === 'API Token')
+    const customPlaceholder = customFieldView?.valueMasked ?? customFieldView?.value
+    check('masked custom field withholds the pristine value key', !('value' in (customFieldView ?? {})))
     const customByHandle = JSON.parse(await revealTool.execute({ placeholder: customPlaceholder }))
     check('a custom-field placeholder resolves to that exact field', customByHandle.value === 'tok_live_abc123' && customByHandle.fieldName === 'API Token')
     const filteredGet = JSON.parse(await getTool.execute({ id: 'cipher-github', field: 'all', fieldName: 'API Token' }))

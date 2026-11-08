@@ -61,6 +61,7 @@ DSH 会话权限为 `workspace-write` / `read-only`（`approval: ask`）时，�
 
 - 插件脱敏默认开启；如果你已经使用其它本地脱敏服务，可在 设置 → 插件 → dsh-vaultwarden 关闭它，关闭后「脱敏轨迹」页不再显示，密码等字段会以明文进入模型上下文和会话日志，存在泄露风险。
 - 占位符形如 `{{BW_PASSWORD_xxxxxxxx}}`，由 HMAC 生成，不可逆；只能引用、比较或按字段取回。
+- 脱敏字段的键名带 `Masked` 后缀（如 `passwordMasked`、`totp.codeMasked`），原键名不再出现。读到缺键即表示该字段已脱敏，必须走 `bitwarden_reveal` 取明文，避免把占位符当成密码填进表单。
 - 脱敏看板与流水详情见 [docs/ui-design.md](docs/ui-design.md)。
 - 擦除标记 `[REDACTED:BW]` 表示明文曾经落盘、随后被擦除；它没有可反查的盐。
 

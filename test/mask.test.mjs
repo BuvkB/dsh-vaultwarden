@@ -93,6 +93,20 @@ check('a masked projection carries the reveal hint', decorated._hint === MASKED_
 const plainProjection = decorateMaskedProjection({ id: 'x', username: 'u', hasTotp: false })
 check('a plain projection is left alone', !plainProjection._masked && !plainProjection._hint)
 
+// withheld values never keep their credential key: `payload.password` must be
+// undefined, not a placeholder a caller would type into a login form
+check('masked password key is renamed', !('password' in decorated) && isPlaceholder(decorated.passwordMasked))
+check('masked totp code key is renamed', !('code' in (decorated.totp ?? {})) && isPlaceholder(decorated.totp?.codeMasked))
+check('masked notes key is renamed', !('notes' in decorated) && isPlaceholder(decorated.notesMasked))
+check('masked custom field value key is renamed', isPlaceholder(decorated.fields?.[0]?.valueMasked) && !('value' in (decorated.fields?.[0] ?? {})))
+check('masked card number key is renamed', isPlaceholder(decorated.card?.numberMasked) && !('number' in (decorated.card ?? {})))
+check('readable card brand keeps its own key', decorated.card?.brand === 'Visa')
+check('masked ssh private key key is renamed', isPlaceholder(decorated.sshKey?.privateKeyMasked) && !('privateKey' in (decorated.sshKey ?? {})))
+check('masked history password key is renamed', isPlaceholder(decorated.passwordHistory?.[0]?.passwordMasked) && !('password' in (decorated.passwordHistory?.[0] ?? {})))
+check('masked identity ssn key is renamed', isPlaceholder(decorated.identity?.ssnMasked) && !('ssn' in (decorated.identity ?? {})))
+check('_maskedFields keeps credential names, not decorated ones', decorated._maskedFields.includes('password') && !decorated._maskedFields.includes('passwordMasked'))
+check('decorating twice cannot double the suffix', !('passwordMaskedMasked' in decorateMaskedProjection(decorated)))
+
 // masking is idempotent-safe: placeholders pass through a second pass untouched
 const before = JSON.stringify(projected)
 maskProjection(projected, key, 'item-9')
