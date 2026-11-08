@@ -4,6 +4,13 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.4] — 2026-11-08
+
+### 修复
+
+- 修复 手机端脱敏看板连接线粒子静止不动：0.17.3 把 SMIL 粒子一并划入「触屏停用」，属连带误伤——粒子恢复为触屏照常运行，只有系统开启「减弱动态效果」时才静止；徽章消失的真凶（z-index 提升图层与光圈/扫描内联动画）已在 0.17.3 修掉，粒子本身不新建图层。
+- 修复 脱敏字段的键名带 `Masked` 后缀（如 `passwordMasked`、`totp.codeMasked`），原键名不再出现：此前 `payload.password` 拿到的是占位符字符串，调用方会把它当成密码填进表单；现在读到缺键即表示该字段已脱敏，只能走 `bitwarden_reveal` 取明文。`_maskedFields` 仍报原始字段名，重复脱敏不会叠加后缀。
+
 ## [0.17.3] — 2026-11-07
 
 ### 修复
