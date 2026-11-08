@@ -2,6 +2,16 @@
 
 插件负责保管、解密和导出通行密钥；浏览器侧只负责执行标准 WebAuthn。**不需要修改 ego、Playwright、Puppeteer 或任何 CDP 插件。**
 
+## 00. 优先顺序：能通行密钥就别用密码
+
+条目只要带通行密钥（`bitwarden_find` 结果里的 `hasFido2: true`；`bitwarden_get` 会额外给一句 `loginHint`），登录就应先走通行密钥：
+
+1. `bitwarden_passkey_list` 确认该条目有哪些通行密钥、是否 `usableForLogin`；
+2. `bitwarden_passkey_export` 导出成 0600 凭据文件；
+3. 按下面第 0 节的配方注入并登录。
+
+密码是后备：只有站点不接受通行密钥、条目没有通行密钥，或导出不可用（当前权限为只读、环境没有 CDP）时，才去 `bitwarden_get` / `bitwarden_reveal` 取密码。
+
 ## 0. 最快路径（一次跑完，可直接照抄）
 
 导出拿到的只是一个文件；真正登录还要在**同一个 `ego_script`** 里把虚拟认证器装进去。顺序不能反：**先注入，再导航**。

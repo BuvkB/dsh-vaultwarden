@@ -76,6 +76,19 @@ async function main() {
     const viaGet = JSON.parse(await client.get('cipher-github', 'passkeys'))
     check('field=passkeys projects metadata only', viaGet.passkeys?.[0]?.rpId === 'github.com' && !('keyValue' in viaGet.passkeys[0]))
 
+    // 1b. passkey-first login: the read that hands a password back must say,
+    // right there, that this entry has a better door — a hasFido2 flag alone
+    // leaves the caller to infer precedence, and a caller about to type a
+    // password is the one that cannot afford the inference.
+    const allRead = JSON.parse(await client.get('cipher-github', 'all'))
+    check('a passkey entry tells a password read to use the passkey first', /通行密钥/.test(String(allRead.loginHint)) && /优先/.test(String(allRead.loginHint)), String(allRead.loginHint))
+    const passwordRead = JSON.parse(await client.get('cipher-github', 'password'))
+    check('the password projection carries the same passkey-first hint', /通行密钥/.test(String(passwordRead.loginHint)))
+    const plainRead = JSON.parse(await client.get('cipher-db', 'all'))
+    check('an entry without a passkey carries no login hint', plainRead.loginHint === undefined, String(plainRead.loginHint))
+    const found = JSON.parse(await client.find('github'))
+    check('the find hint states the passkey-first order', /hasFido2/.test(String(found.hint)) && /优先/.test(String(found.hint)), String(found.hint))
+
     // 2. export writes a 0600 CDP-shaped file ---------------------------------
     // A forgotten export must not live forever: an old file in the same private
     // directory is pruned before the new one is written.
