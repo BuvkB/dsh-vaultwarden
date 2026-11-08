@@ -3632,7 +3632,25 @@ async function main() {
       'the board particles stand down only for reduced motion, never for touch',
       /reduceMotion\s*\n\s*\?\s*null/.test(clientSource) && !clientSource.includes('pointerCoarse'),
     )
-    check('the gate line has a downward scan bar', root().findAll((node) => node.props?.['data-vw-gate-scan'] !== undefined).length === 1)
+    // The gate's motion is SMIL inside the ribbons SVG, never CSS animation on
+    // an HTML sibling of the badge: on iOS PWA in this size container, an
+    // animated CSS layer next to the badge stopped the badge itself from
+    // painting — measured twice on device. SMIL in this SVG has never cost the
+    // badge, so both the scan bar and the halo must stay here.
+    const scanNode = root().findAll((node) => node.props?.['data-vw-gate-scan'] !== undefined)[0]
+    check('the gate line has a downward scan bar', Boolean(scanNode), 'scan bar missing')
+    check(
+      'the scan bar is SMIL inside the ribbons SVG, not a CSS-animated span',
+      scanNode?.type === 'rect' && scanNode.findAll((node) => node.type === 'animate').length > 0,
+      String(scanNode?.type),
+    )
+    const haloNode = root().findAll((node) => node.props?.['data-vw-gate-halo'] !== undefined)[0]
+    check(
+      'the gate halo breathes with SMIL too',
+      haloNode?.type === 'circle' && haloNode.findAll((node) => node.type === 'animate').length > 0,
+      String(haloNode?.type),
+    )
+    check('no CSS gate keyframes are left to break the badge', !String(panelSheetText).includes('@keyframes vw-gate-'), 'a vw-gate-* keyframe still exists')
     check('the board says what is off the three names', bodyText().includes('另外 1 个会话') && bodyText().includes('另外 2 个模型'))
     check('the board carries the gate mark', root().findAll((node) => node.props?.['data-vw-trail-flow'] !== undefined)[0].findAll((node) => node.props?.title === '只放行脱敏后的请求').length === 1)
     check('the model names keep their provider in the tooltip', bodyText().includes('curi-gate') && bodyText().includes('workbuddy/deepseek-v4.1-flash'))
