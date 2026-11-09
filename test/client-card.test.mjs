@@ -3647,9 +3647,13 @@ async function main() {
     const haloNode = root().findAll((node) => node.props?.['data-vw-gate-halo'] !== undefined)[0]
     check(
       'the gate halo breathes with SMIL too',
-      haloNode?.type === 'circle' && haloNode.findAll((node) => node.type === 'animate').length > 0,
+      haloNode?.type === 'ellipse' && haloNode.findAll((node) => node.type === 'animate').length >= 3,
       String(haloNode?.type),
     )
+    // A mild ellipse, not a perfect circle and not the 1.8:1 oval the stretched
+    // ribbons viewBox used to produce: rx/ry between 1.05 and 1.3.
+    const haloRatio = Number(haloNode?.props?.rx) / Number(haloNode?.props?.ry)
+    check('the halo keeps a slight, controlled ellipse', haloRatio > 1.05 && haloRatio < 1.3, String(haloRatio))
     check('no CSS gate keyframes are left to break the badge', !String(panelSheetText).includes('@keyframes vw-gate-'), 'a vw-gate-* keyframe still exists')
     check('the board says what is off the three names', bodyText().includes('另外 1 个会话') && bodyText().includes('另外 2 个模型'))
     check('the board carries the gate mark', root().findAll((node) => node.props?.['data-vw-trail-flow'] !== undefined)[0].findAll((node) => node.props?.title === '只放行脱敏后的请求').length === 1)
