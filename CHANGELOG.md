@@ -4,6 +4,13 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.5] — 2026-11-09
+
+### 修复
+
+- 修复 手机端脱敏看板门禁的扫描竖线与呼吸光圈不显示：动画改用 SVG 内的 SMIL 绘制。
+- 修复 门禁光晕在宽面板下被拉成扁椭圆：光晕改用独立等比 SVG，形状固定为轻椭圆。
+
 ## [0.17.4] — 2026-11-08
 
 ### 修复
