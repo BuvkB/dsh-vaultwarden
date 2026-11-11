@@ -1488,6 +1488,19 @@ async function main() {
     check('the connection form hides the vault tab strip', tree().findAll((node) => node.props?.['data-vw-tab'] !== undefined).length === 0)
     check('the connection form hides the search and sync toolbar', tree().findAll((node) => node.props?.['data-vw-toolbar'] !== undefined).length === 0)
     check('the connection form uses label/control settings rows', tree().findAll((node) => node.props?.['data-vw-setting-row'] !== undefined).length >= 4)
+    // The controls must sit centred against their label+hint block, not pinned
+    // to its top: a two-line hint used to leave the input visibly high.
+    check(
+      'settings rows centre their controls',
+      tree()
+        .findAll((node) => node.props?.['data-vw-setting-row'] !== undefined)
+        .every((node) => node.props.style.alignItems === 'center'),
+    )
+    // Overlay scrollbars paint over the page; the inset keeps the cards off it.
+    check(
+      'the settings page keeps clear of the scrollbar',
+      tree().findAll((node) => node.props?.['data-vw-setup-page'] !== undefined)[0]?.props.style.paddingRight === 10,
+    )
     await act(async () => { panel.renderer.unmount() })
   }
 
@@ -4245,6 +4258,27 @@ async function main() {
     await act(async () => { panel.renderer.unmount() })
   }
 
+  // ── the host-permission note in the plugin settings page ─────────────────
+  // The sentence used to live only in a button tooltip, which touch readers
+  // never see. The card must carry it as visible copy, matching the tier on
+  // screen: 完全权限 needs the host at Full access, 每次确认 at Workspace write.
+  {
+    for (const [tier, expected] of [
+      ['auto', '请将 DSH 对话权限调整为「完全权限」'],
+      ['ask', '请将 DSH 对话权限调整为「工作区内修改」'],
+    ]) {
+      const rpc = makeRpc({ boot: () => bootWith({ ...CONFIG_VALUE, accessMode: tier }, true, AUTHED_SESSION) })
+      const panel = await mountPanel(mod, {}, rpc)
+      const gear = panel.renderer.root.findAll((node) => node.type === 'button' && node.props['aria-label'] === '设置')[0]
+      await act(async () => { gear.props.onClick() })
+      await flush(40)
+      const text = JSON.stringify(panel.renderer.toJSON())
+      check(`the ${tier} permission card shows its host hint`, text.includes(expected), expected)
+      check(`the ${tier} permission card renders the host hint block`, panel.renderer.root.findAll((node) => node.props?.['data-vw-permission-host-hint'] !== undefined).length === 1)
+      await act(async () => { panel.renderer.unmount() })
+    }
+  }
+
   // ── the masking card in the plugin settings page ─────────────────────────
   // Turning masking off is the dangerous direction: the card must ask first,
   // and the RPC carries confirm=true only after that dialog is accepted.
@@ -4379,10 +4413,10 @@ async function main() {
     await act(async () => { gear().props.onClick() })
     await flush(40)
     const text = () => JSON.stringify(panel.renderer.toJSON())
-    check('the cards paint the defaults while boot is pending', text().includes('当前：只读') && text().includes('已开启'), 'defaults missing')
+    check('the cards paint the defaults while boot is pending', text().includes('"data-vw-permission-tone":"ok"') && text().includes('已开启'), 'defaults missing')
     await act(async () => { releaseBoot?.() })
     await act(async () => { await sleep(80) })
-    check('the permission card re-seeds to the real tier', text().includes('当前：完全权限'), 'tier not re-seeded')
+    check('the permission card re-seeds to the real tier', text().includes('"data-vw-permission-tone":"danger"'), 'tier not re-seeded')
     check('the masking card re-seeds to the real switch', text().includes('已关闭'), 'mask not re-seeded')
     await act(async () => { panel.renderer.unmount() })
   }
