@@ -125,7 +125,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // ── canned RPC payloads ───────────────────────────────────────────────────────
 const ITEMS = [
-  { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: ['https://github.com/login'], folder: '工作', collections: [], hasTotp: true, hasNotes: true, customFields: ['租户'], favorite: true },
+  { id: 'item-1', name: 'GitHub 工作账号', type: 'login', username: 'octocat@example.com', uris: ['https://github.com/login'], folder: '工作', collections: [], hasTotp: true, hasFido2: true, hasNotes: true, customFields: ['租户'], favorite: true },
   { id: 'item-2', name: '生产数据库口令', type: 'secureNote', username: null, uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
   { id: 'item-3', name: '需要重新验证的条目', type: 'login', username: 'reprompt-user', uris: [], folder: null, collections: [], hasTotp: false, hasNotes: false, customFields: [], favorite: false },
   // The shape most real vaults are full of: an entry named after a host, whose
@@ -613,6 +613,20 @@ async function main() {
   check('the toolbar keeps no standing entry count', !text().includes(`共 ${ITEM_COUNT} 条`))
   check('list renders one option per entry', rows().length === ITEM_COUNT, `rows=${rows().length}`)
   check('selected state is exposed via aria-selected', rows()[0].props['aria-selected'] === 'false')
+
+  // ── the row's marks: TOTP, passkey, custom fields ────────────────────────
+  // The detail card has always named these; the list only marked TOTP, so a
+  // passkey-only login looked bare and an entry with custom fields gave no
+  // hint that opening it was worth it.
+  {
+    const marksOf = (row) => row.findAll((node) => node.props?.['data-vw-badge'] !== undefined)
+    const markLabels = marksOf(rows()[0]).map((node) => node.props.children)
+    check('a row marks TOTP, passkey and custom fields together', markLabels.includes('TOTP') && markLabels.includes('通行密钥') && markLabels.includes('自定义'), JSON.stringify(markLabels))
+    const customMark = marksOf(rows()[0]).find((node) => node.props.children === '自定义')
+    check('the custom-field mark counts the fields in its tooltip', customMark?.props.title === '包含 1 个自定义字段', String(customMark?.props.title))
+    const plainMarks = marksOf(rows()[1]).map((node) => node.props.children)
+    check('an entry without those marks shows none of them', !plainMarks.includes('通行密钥') && !plainMarks.includes('自定义') && !plainMarks.includes('TOTP'), JSON.stringify(plainMarks))
+  }
 
   // ── a row is a div now, and it carries its own quick actions ─────────────
   // The row used to be a <button>, which is why copying an account meant

@@ -4,6 +4,19 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.6] — 2026-11-12
+
+### 新增
+
+- 新增 密码列表行显示「通行密钥」与「自定义」标记；自定义标记悬停显示字段数量。
+- 新增 设置页权限卡显示当前档位对应的 DSH 对话权限提示（完全权限 / 每次确认）。
+
+### 修复
+
+- 修复 设置页右侧滚动条与内容贴合：整页留出 10px 间距。
+- 修复 设置页输入框未与说明垂直居中：设置行改为垂直居中。
+- 修复 设置页文案过长、权限徽章与说明重复：连接、权限与脱敏文案精简。
+
 ## [0.17.5] — 2026-11-09
 
 ### 修复
