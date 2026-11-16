@@ -4,6 +4,12 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.7] — 2026-11-16
+
+### 新增
+
+- 新增 脱敏轨迹页「通行密钥调用」列表分页：每页 10 条，页脚显示总条数与页码；宿主按页读取，越界页自动回落，旧宿主自动退回原接口。
+
 ## [0.17.6] — 2026-11-12
 
 ### 新增

@@ -11,6 +11,8 @@ import { join } from 'node:path'
 import { VaultClient, VaultError } from '../lib/vault.js'
 import { VaultMutations } from '../lib/mutations.js'
 import {
+  countPasskeyAudit,
+  readPasskeyAudit,
   removePasskeyExports,
   toCdpCredential,
   toPlaywrightCredential,
@@ -150,6 +152,26 @@ async function main() {
     check('the export writes an audit record', Boolean(audit) && typeof audit.at === 'string' && audit.entryId === 'cipher-github' && audit.rpId === 'github.com', JSON.stringify(audit))
     check('the audit records the actor and access tier', audit.actor === 'model' && audit.accessMode === 'readonly', JSON.stringify({ actor: audit.actor, accessMode: audit.accessMode }))
     check('the audit carries no private key material', !JSON.stringify(audit).includes(document.cdp.privateKey.slice(0, 16)) && !('keyValue' in audit) && !('privateKey' in audit))
+
+    // The panel reads the audit ten rows at a time. The reader is the half that
+    // decides where a page begins, so its boundaries are checked here: newest
+    // first, offset in readable records, and a malformed line that neither
+    // shifts a boundary nor inflates the count.
+    const auditPageDir = mkdtempSync(join(tmpdir(), 'bw-passkey-audit-'))
+    writeFileSync(
+      join(auditPageDir, 'audit.jsonl'),
+      Array.from({ length: 23 }, (_, index) => JSON.stringify({ at: `2026-11-01T00:${String(index).padStart(2, '0')}:00.000Z`, seq: index })).join('\n') +
+        '\nnot json\n',
+      { mode: 0o600 },
+    )
+    const pageOne = readPasskeyAudit(auditPageDir, 10, 0)
+    const pageTwo = readPasskeyAudit(auditPageDir, 10, 10)
+    const pageThree = readPasskeyAudit(auditPageDir, 10, 20)
+    check('the audit reader pages newest first', pageOne.length === 10 && pageOne[0].seq === 22 && pageOne[9].seq === 13, JSON.stringify(pageOne.map((record) => record.seq)))
+    check('the audit reader starts page two after the first ten', pageTwo.length === 10 && pageTwo[0].seq === 12 && pageTwo[9].seq === 3, JSON.stringify(pageTwo.map((record) => record.seq)))
+    check('the audit reader reports the short tail', pageThree.length === 3 && pageThree[0].seq === 2 && pageThree[2].seq === 0, JSON.stringify(pageThree.map((record) => record.seq)))
+    check('the audit count ignores a malformed line', countPasskeyAudit(auditPageDir) === 23, String(countPasskeyAudit(auditPageDir)))
+    rmSync(auditPageDir, { recursive: true, force: true })
 
     // Cleanup is deliberately available without an approval prompt (it only
     // reduces exposure) and is scoped to the plugin's own export directory.

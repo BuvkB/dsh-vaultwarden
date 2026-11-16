@@ -3529,24 +3529,41 @@ async function main() {
       { time: Date.parse('2026-10-26T09:02:00+08:00'), count: 1, provider: 'stepfun', model: 'step-5-preview', session: 'bbb', name: '馒头保号登录' },
       { time: Date.parse('2026-10-26T08:02:00+08:00'), count: 7, provider: null, model: null, session: 'ccc', name: '脱敏流水详情页与移动端优化' },
     ]
+    // Twelve audit records, ten to a page: enough to prove the audit pages
+    // instead of dumping the whole log on one screen, and few enough that the
+    // second page is visibly the tail.
+    const auditRecords = Array.from({ length: 12 }, (_, index) =>
+      index === 0
+        ? {
+            at: '2026-11-02T10:50:00.000Z',
+            actor: 'model',
+            entryId: '829db4d5-8574-481d-896c-cceaf8670fa8',
+            entryName: 'telegram.org',
+            rpId: 'telegram.org',
+            accessMode: 'auto',
+            credentialIdHint: 'AAAA…',
+            file: 'telegram.org-test.json',
+          }
+        : {
+            at: `2026-11-01T10:${String(50 - index).padStart(2, '0')}:00.000Z`,
+            actor: 'panel-user',
+            entryId: `entry-${index}`,
+            entryName: `audit-${index}.example`,
+            rpId: `audit-${index}.example`,
+            accessMode: 'ask',
+          },
+    )
     const trailRpc = makeRpc({
-      passkeyAudit: () => ({
-        ok: true,
-        value: {
-          records: [
-            {
-              at: '2026-11-02T10:50:00.000Z',
-              actor: 'model',
-              entryId: '829db4d5-8574-481d-896c-cceaf8670fa8',
-              entryName: 'telegram.org',
-              rpId: 'telegram.org',
-              accessMode: 'auto',
-              credentialIdHint: 'AAAA…',
-              file: 'telegram.org-test.json',
-            },
-          ],
-        },
-      }),
+      passkeyAudit: (args) => {
+        const size = Math.max(1, Number(args.limit) || 10)
+        const pages = Math.max(1, Math.ceil(auditRecords.length / size))
+        const page = Math.min(Math.max(1, Number(args.page) || 1), pages)
+        const from = (page - 1) * size
+        return {
+          ok: true,
+          value: { records: auditRecords.slice(from, from + size), total: auditRecords.length, page, pages, size },
+        }
+      },
       trail: (args) => {
         const reply = {
           ok: true,
@@ -3640,6 +3657,23 @@ async function main() {
     check("the trail page drops the search box and the rail", !bodyText().includes("data-vw-search") && root().findAll((node) => node.props?.['data-vw-nav'] !== undefined).length === 0)
     check('the trail page names the conversations that asked', bodyText().includes('喜鹊服务配置与插件安装'))
     check('the trail page shows passkey usage audits', bodyText().includes('通行密钥调用') && bodyText().includes('telegram.org') && bodyText().includes('完全权限'))
+    // The audit is its own table with its own pager. It used to load twenty
+    // rows at once and push the masking ledger off the screen; ten is the page
+    // the user asked for, and the second page keeps the tail reachable.
+    const auditRows = () => root().findAll((node) => node.props?.['data-vw-passkey-audit-row'] !== undefined)
+    const auditPagerButtons = () => root().findAll((node) => node.props?.['data-vw-audit-pager-btn'] !== undefined)
+    const auditPagerButton = (key) => auditPagerButtons().filter((node) => node.props['data-vw-audit-pager-btn'] === key)[0]
+    check('the passkey audit shows ten rows a page', auditRows().length === 10, String(auditRows().length))
+    check('the passkey audit foot states the log length', bodyText().includes('共 12 条'), String(auditPagerButtons().length))
+    check('the passkey audit offers its second page', Boolean(auditPagerButton('2')), JSON.stringify(auditPagerButtons().map((node) => node.props['data-vw-audit-pager-btn'])))
+    check('the passkey audit starts on page one', auditPagerButton('1').props['data-active'] === 'true' && auditPagerButton('prev').props.disabled === true)
+    await act(async () => { auditPagerButton('next').props.onClick() })
+    await flush(120)
+    check('the passkey audit turns to the tail page', auditRows().length === 2 && bodyText().includes('audit-11.example'), String(auditRows().length))
+    check('the passkey audit pager follows the page it served', auditPagerButton('2').props['data-active'] === 'true')
+    await act(async () => { auditPagerButton('1').props.onClick() })
+    await flush(120)
+    check('the passkey audit returns to the newest page', auditRows().length === 10 && bodyText().includes('telegram.org'))
     // The board is data first: one bar per day of the window, then the three
     // busiest names on each side of the gate. More names must not sneak in —
     // the animation is specified to follow three, and a fourth label at 320px
