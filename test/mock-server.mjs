@@ -436,7 +436,9 @@ export async function buildFixtures(options = {}) {
       },
       ciphers,
       folders,
-      collections: [{ id: 'col-1', organizationId: 'org-1', name: encryptString('运维', userKey) }],
+      // Collection names are org-key encrypted (Bitwarden Collection.decrypt(orgKey));
+      // encrypting with userKey here would repeat the client bug this fixture must catch.
+      collections: [{ id: 'col-1', organizationId: 'org-1', name: encryptString('运维', orgKey) }],
     },
   }
 }

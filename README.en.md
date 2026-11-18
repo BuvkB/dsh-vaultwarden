@@ -13,7 +13,7 @@ A **Vaultwarden / Bitwarden** integration for DeepSeek Harness. Browse and edit 
 ## Highlights
 
 - **Real-time sync & cache**: SignalR WebSocket updates, with automatic polling fallback and upgrade retries; an encrypted local cache plus revision probing speeds up cold starts.
-- **Vault panel**: sections, search, paging, entry details, TOTP countdown, copy, create/edit, archive/trash/restore and folder moves; write actions follow the plugin's access tier.
+- **Vault panel**: sections, search, paging, entry details, TOTP countdown, copy, create/edit, archive/trash/restore and folder moves; write actions follow the plugin's access tier. New or rotated login passwords can be generated and encrypted straight into the vault without entering the conversation or logs.
 - **Masking & log scrubbing**: passwords, TOTP codes and card data are returned as stable placeholders with a `Masked` key suffix (e.g. `passwordMasked`) — the pristine key is never present, so a caller that forgets to reveal fails loudly instead of submitting a placeholder; values are fetchable per entry and field, and plaintext in session logs is periodically replaced with `[REDACTED:BW]`, with incremental and immediate sweeps.
 - **Masking dashboard**: daily totals, top conversations/models and a drill-down masking ledger.
 - **Passkeys**: read passkey metadata from entries; export a 0600 WebAuthn credential file under the plugin's access tier (v2 with `cdp` and `playwright` blocks for CDP clients and Playwright), with import, remove and temporary-file cleanup; login recipe in [docs/passkey-login.md](docs/passkey-login.md). **Login prefers a passkey whenever the entry has one** (`hasFido2: true`); the password is only the fallback.

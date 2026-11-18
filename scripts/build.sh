@@ -140,6 +140,13 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   echo "=== write-back regression test (trash / concurrency / field preservation) ==="
   node test/write-back.test.mjs
 
+  # The 2026-11-18 audit regressions: cache-off revision probes, custom-field
+  # replacement/duplicates, URI match policies, org collection keys, optional
+  # field resilience, stale reprompt exports, generated passwords and the
+  # panel's blank-form create contract.
+  echo "=== audit regression suite (2026-11-18) ==="
+  node test/audit-regressions.test.mjs
+
   # Passkeys: decryption of login.fido2Credentials, the gated export (private
   # key to a 0600 file), and the import/remove write path that must not reset
   # the entry's own fields.

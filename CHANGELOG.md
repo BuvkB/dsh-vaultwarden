@@ -4,6 +4,33 @@ All notable changes to `dsh-vaultwarden` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-11-19
+
+### 新增
+
+- 新增 新建/编辑登录条目时可生成强密码（`generatePassword` / `passwordOptions`）：生成、加密、写入均在宿主进程内完成，密码不进入对话或日志；轮换密码自动写入密码历史。
+- 新增 `test/audit-regressions.test.mjs` 与构建门禁接入，覆盖缓存探针、字段替换、URI match、组织集合名、损坏可选项、reprompt 导出、生成密码和面板新建五类条目。
+
+### 修复
+
+- 修复 面板「新建条目」五种类型全部失败：空白表单携带异类型空 payload，且 URI 字符串未归一化。
+- 修复 `/api/sync` 返回 200 HTML/维护页时被当成空保险库并覆盖本地缓存；非同步响应现在报 `bad_sync_response`，坏 payload 不落缓存。
+- 修复 连接探针复用已存会话，导致同一账号下错误主密码被接受并写回设置；探针改为隔离 session/cache。
+- 修复 reprompt 缓存陈旧可绕过：通行密钥导出、draft、passkey 列表强制 fresh，面板 reveal/TOTP 增加短周期 revision 探测。
+- 修复脱敏轨迹漏计经典 `tool/call` + `tool/result` 占位符；修复 Sweeper 漏扫无版本号 `session.jsonl.zstd` 日志。
+- 修复 自定义字段删除失效与重名字段合并丢失；新增 `replaceFields` 全量替换语义。
+- 修复 URI 删除/重排时 `match` / `uriChecksum` 按索引错配；现在按解密后的 URI 值匹配。
+- 修复 组织集合名使用 userKey 解密（应为 org key），以及组织条目更新丢失 `collectionIds`。
+- 修复 单个损坏的 passwordHistory/附件/URI/自定义字段拖垮整条条目；可选字段改为逐项容错。
+- 修复 写路径 401 不失效 token、空密码误删、create 自动重试重复建条目。
+- 修复 登录后不加载 overview/folders、切换账号残留旧详情/明文、移动文件夹串条目、删除后详情报错、section 缓存过期。
+- 修复 WebSocket 开即关无限重连、时钟未来时间戳导致会话/种子永久不过期、大日志 trail 详情丢 spots。
+
+### 优化
+
+- 修复 `localCache:false` 时每次 fresh 读取都全量 `/api/sync`：内存 vault 现在保留 revision，13 字节探针仍生效。
+- 补充 密码存在位、同步响应校验与面板同步状态等操作提示。
+
 ## [0.17.7] — 2026-11-16
 
 ### 新增
